@@ -22,12 +22,12 @@ Thumbs.db
 *.lock
 
 *.db
-
 notes.txt
 !debug_error.log
 
 .artifacts
-.arch/
-
+.arch
+.claude
 data/
+
 plots/

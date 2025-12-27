@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from typing import Optional, List, Dict, Any
 from .model_config import ModelConfig
 from .feature_builder import build_feature_matrix
-from .bootstrap_cv import BootstrapCrossValidator
+from .repeated_cv import RepeatedCrossValidator
 from ..db.models.snapshot import FinancialSnapshot
 from ..filters.composer import DatasetFilter
 
@@ -84,12 +84,18 @@ class ValuationService:
         
         # 4. Run Bootstrap Cross-Validation
         logger.info("Running bootstrap cross-validation...")
-        cv_engine = BootstrapCrossValidator(
+        # Prepare model params for default XGBoost (since ValuationService uses default)
+        model_params = {
+            'objective': model_config.loss_function,
+            'n_jobs': -1
+        }
+        
+        cv_engine = RepeatedCrossValidator(
             n_experiments=model_config.n_experiments,
             outer_splits=model_config.outer_cv_splits,
             inner_splits=model_config.inner_cv_splits,
             param_grid=model_config.param_grid,
-            loss_function=model_config.loss_function,
+            model_init_params=model_params,
             random_seed=model_config.random_seed
         )
         

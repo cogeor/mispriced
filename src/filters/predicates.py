@@ -124,3 +124,47 @@ def frequency_filter(frequency: str = "quarterly") -> FilterPredicate:
             return pd.Series(False, index=df.index)
         return df["frequency"] == frequency
     return predicate
+
+
+def latest_before(cutoff_date) -> FilterPredicate:
+    """
+    Filter to keep only the latest snapshot per ticker BEFORE a cutoff date.
+    
+    Useful for backtesting: ensures we only use data that was available
+    before the cutoff, avoiding look-ahead bias.
+    
+    Args:
+        cutoff_date: date or datetime - only snapshots before this date are considered
+        
+    Returns:
+        FilterPredicate that keeps the latest snapshot per ticker before cutoff
+    """
+    def predicate(df: pd.DataFrame) -> pd.Series:
+        if "snapshot_timestamp" not in df.columns:
+            return pd.Series(True, index=df.index)
+        
+        # Convert cutoff to datetime
+        cutoff = pd.to_datetime(cutoff_date)
+        
+        # First filter to only rows before cutoff
+        before_cutoff = df["snapshot_timestamp"] < cutoff
+        
+        # Create a copy to avoid SettingWithCopyWarning
+        df_before = df[before_cutoff].copy()
+        
+        if df_before.empty:
+            return pd.Series(False, index=df.index)
+        
+        # For each ticker, find the max timestamp among those before cutoff
+        max_dates = df_before.groupby("ticker")["snapshot_timestamp"].transform("max")
+        
+        # Now mark which rows in original df are the latest before cutoff
+        result = pd.Series(False, index=df.index)
+        
+        for idx in df_before.index:
+            if df_before.loc[idx, "snapshot_timestamp"] == max_dates.loc[idx]:
+                result.loc[idx] = True
+        
+        return result
+    return predicate
+

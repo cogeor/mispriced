@@ -1,4 +1,4 @@
-# Misspriced: Financial Statement Valuator
+# Mispriced: Financial Statement Valuator
 
 > A portfolio analysis system that predicts fair market capitalization from financial statements and identifies mispriced securities using machine learning.
 
@@ -9,7 +9,7 @@
 
 ## Overview
 
-**Misspriced** is a quantitative finance tool that:
+**Mispriced** is a quantitative finance tool that:
 - **Predicts fair market capitalization** from financial statements using XGBoost with bootstrap cross-validation
 - **Identifies mispriced securities** by comparing predicted vs. actual market caps
 - **Aggregates valuations to index level** with uncertainty propagation  

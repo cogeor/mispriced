@@ -40,3 +40,21 @@ def full_feature_model() -> ModelConfig:
         .cv_config(n_experiments=100)
         .build()
     )
+
+def gbr_baseline_model() -> ModelConfig:
+    """Create baseline Gradient Boosting Regressor model."""
+    return (
+        ModelBuilder("GBR_Baseline", "1")
+        .description("Gradient Boosting Regressor baseline")
+        .model_type("gbr")
+        .add_core_fundamentals()
+        .add_ratio_features()
+        .param_grid(
+            n_estimators=[100, 200],
+            max_depth=[3, 5],
+            learning_rate=[0.05, 0.1],
+            subsample=[0.8],
+        )
+        .cv_config(n_experiments=100)
+        .build()
+    )

@@ -14,6 +14,18 @@ class WeightingScheme(str, Enum):
     CUSTOM = "custom"
 
 
+class IndexAnalysis(BaseModel):
+    """Dashboard-friendly index analysis result."""
+
+    index: str = Field(description="Index identifier (e.g., SP500)")
+    mispricing: float = Field(description="Relative mispricing as decimal")
+    status: str = Field(description="UNDERPRICED or OVERPRICED")
+    total_actual: float = Field(description="Total actual market cap in USD")
+    total_predicted: float = Field(description="Total predicted market cap in USD")
+    count: int = Field(description="Number of tickers with valuations")
+    official_count: int = Field(description="Official number of constituents")
+
+
 class IndexResult(BaseModel):
     """Result of index calculation at a single point in time."""
 

@@ -1,4 +1,4 @@
-# GEMINI Design Guidelines
+# CLAUDE Design Guidelines
 
 This document defines the design file organization and formatting standards for the fintech project.
 

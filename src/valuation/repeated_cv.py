@@ -8,7 +8,7 @@ from typing import Dict, Any, List
 
 logger = logging.getLogger(__name__)
 
-class BootstrapCrossValidator:
+class RepeatedCrossValidator:
     """
     Executes repeated nested cross-validation to estimate prediction confidence intervals.
     """
@@ -19,8 +19,8 @@ class BootstrapCrossValidator:
         outer_splits: int = 4,
         inner_splits: int = 4,
         model_class: Any = XGBRegressor,
+        model_init_params: Dict[str, Any] = None,
         param_grid: dict = None,
-        loss_function: str = 'reg:squarederror',
         random_seed: int = 42
     ):
         self.n_experiments = n_experiments
@@ -30,7 +30,7 @@ class BootstrapCrossValidator:
         
         # Base model configuration
         self.model_class = model_class
-        self.loss_function = loss_function
+        self.model_init_params = model_init_params or {}
         self.random_seed = random_seed
 
     def fit_predict(self, X: np.ndarray, target_vector: np.ndarray) -> Dict[str, Any]:
@@ -54,12 +54,12 @@ class BootstrapCrossValidator:
             inner_cv = KFold(n_splits=self.inner_splits, shuffle=True, random_state=seed)
             
             # Create pipeline with fresh model
+            # Merge init params with random state
+            model_params = self.model_init_params.copy()
+            model_params['random_state'] = seed
+            
             pipeline = Pipeline([
-                ('regressor', self.model_class(
-                    objective=self.loss_function,
-                    random_state=seed, 
-                    n_jobs=-1  # Use parallel processing
-                ))
+                ('regressor', self.model_class(**model_params))
             ])
             
             # Prefix param grid keys with 'regressor__' for pipeline

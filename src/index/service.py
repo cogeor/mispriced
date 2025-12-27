@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from src.db.models.index import Index
 from src.db.models.valuation import ValuationResult
 from src.db.repositories.index_repo import IndexRepository, IndexMembershipRepository
-from .models import IndexResult, WeightingScheme
+from .models import IndexAnalysis, IndexResult, WeightingScheme
 from .weights import (
     compute_equal_weights,
     compute_market_cap_weights,
@@ -253,5 +253,154 @@ class IndexService:
             except ValueError as e:
                 logger.warning(f"Skipping timestamp {ts}: {e}")
                 continue
+
+        return results
+
+    def analyze_index(
+        self,
+        index_id: str,
+        official_count: int = 0,
+        as_of_date: Optional[datetime] = None,
+        model_version: Optional[str] = None,
+    ) -> Optional[IndexAnalysis]:
+        """
+        Analyze index mispricing for dashboard display.
+
+        Uses cap-weighted aggregation of actual vs predicted market caps.
+
+        Args:
+            index_id: Index to analyze (e.g., "SP500")
+            official_count: Official number of constituents (for coverage display)
+            as_of_date: If provided, only use valuations from this specific date
+            model_version: If provided, only use valuations from this model version
+
+        Returns:
+            IndexAnalysis with mispricing metrics, or None if no data
+        """
+        from src.db.models.index import IndexMembership
+
+        query = self.session.query(
+            ValuationResult.ticker,
+            ValuationResult.relative_error,
+            ValuationResult.actual_mcap,
+            ValuationResult.predicted_mcap_mean,
+            ValuationResult.snapshot_timestamp,
+        ).join(
+            IndexMembership,
+            IndexMembership.ticker == ValuationResult.ticker,
+        ).filter(
+            IndexMembership.index_id == index_id
+        )
+        
+        # If as_of_date provided, filter to that specific quarter
+        if as_of_date:
+            query = query.filter(ValuationResult.snapshot_timestamp == as_of_date)
+            
+        # If model_version provided, filter to that specific version
+        if model_version:
+            query = query.filter(ValuationResult.model_version == model_version)
+
+        import pandas as pd
+
+        results = pd.read_sql(query.statement, self.session.bind)
+
+        if results.empty:
+            logger.warning(f"No valuation results for {index_id}")
+            return None
+
+        # Keep only the latest valuation per ticker
+        results = results.sort_values('snapshot_timestamp', ascending=False)
+        results = results.drop_duplicates(subset=["ticker"], keep='first')
+        covered_count = len(results)
+
+        total_actual = float(results["actual_mcap"].sum())
+        total_predicted = float(results["predicted_mcap_mean"].sum())
+
+        if total_actual == 0:
+            logger.warning(f"Total actual market cap is 0 for {index_id}")
+            return None
+
+        mispricing = (total_predicted - total_actual) / total_actual
+        status = "UNDERPRICED" if mispricing > 0 else "OVERPRICED"
+
+        return IndexAnalysis(
+            index=index_id,
+            mispricing=mispricing,
+            status=status,
+            total_actual=total_actual,
+            total_predicted=total_predicted,
+            count=covered_count,
+            official_count=official_count or covered_count,
+        )
+
+    def analyze_all_indices(
+        self,
+        index_ids: Optional[List[str]] = None,
+    ) -> List[IndexAnalysis]:
+        """
+        Analyze mispricing for multiple indices using the latest quarter with data.
+
+        Args:
+            index_ids: List of index IDs to analyze.
+                       If None, analyzes all indices in the database.
+
+        Returns:
+            List of IndexAnalysis results (excludes indices with no data)
+        """
+        if index_ids is None:
+            # Get all indices from database
+            indices = self.session.query(Index.index_id).all()
+            index_ids = [idx[0] for idx in indices]
+
+        # Find the latest quarter date with significant valuations
+        from sqlalchemy import func
+        from src.db.models.index import IndexMembership
+        
+        last_quarter = (
+            self.session.query(ValuationResult.snapshot_timestamp)
+            .group_by(ValuationResult.snapshot_timestamp)
+            .having(func.count(func.distinct(ValuationResult.ticker)) > 1000)
+            .order_by(ValuationResult.snapshot_timestamp.desc())
+            .first()
+        )
+        
+        last_quarter_date = last_quarter[0] if last_quarter else None
+        
+        # Find dominant model version for this quarter
+        model_version = None
+        if last_quarter_date:
+            most_common_version = (
+                self.session.query(ValuationResult.model_version)
+                .filter(ValuationResult.snapshot_timestamp == last_quarter_date)
+                .group_by(ValuationResult.model_version)
+                .order_by(func.count(ValuationResult.ticker).desc())
+                .first()
+            )
+            model_version = most_common_version[0] if most_common_version else None
+            
+        logger.info(f"Using last quarter date: {last_quarter_date}, model: {model_version}")
+
+        # Get official counts from memberships (unique tickers per index)
+        counts_query = (
+            self.session.query(
+                IndexMembership.index_id,
+                func.count(func.distinct(IndexMembership.ticker)).label("count"),
+            )
+            .filter(IndexMembership.index_id.in_(index_ids))
+            .group_by(IndexMembership.index_id)
+        )
+        official_counts = {row[0]: row[1] for row in counts_query.all()}
+
+        results = []
+        for index_id in index_ids:
+            official_count = official_counts.get(index_id, 0)
+            analysis = self.analyze_index(
+                index_id, 
+                official_count, 
+                as_of_date=last_quarter_date,
+                model_version=model_version
+            )
+            if analysis:
+                results.append(analysis)
 
         return results
