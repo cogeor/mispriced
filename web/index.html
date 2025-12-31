@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en" class="dark">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mispriced - Market Valuation Dashboard</title>
+    <!-- Tailwind CSS via CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        gray: {
+                            850: '#1f2937',
+                            900: '#111827',
+                            950: '#0b0f19',
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- Plotly via CDN -->
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+
+    <style>
+        body {
+            background-color: #0b0f19;
+            color: #e5e7eb;
+            font-family: 'Inter', sans-serif;
+        }
+
+        /* Glassmorphism Card Style */
+        .card {
+            background: rgba(17, 24, 39, 0.7);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(55, 65, 81, 0.5);
+            border-radius: 0.75rem;
+            /* rounded-xl */
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+
+        .stat-card {
+            background: rgba(31, 41, 55, 0.4);
+            border: 1px solid rgba(75, 85, 99, 0.4);
+            border-radius: 0.75rem;
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #111827;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #374151;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #4b5563;
+        }
+
+        /* Button States */
+        .toggle-btn {
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .toggle-btn.active {
+            background-color: #2563eb;
+            /* blue-600 */
+            color: white;
+            border-color: #3b82f6;
+            box-shadow: 0 0 10px rgba(37, 99, 235, 0.3);
+        }
+
+        .toggle-btn:not(.active):hover {
+            background-color: rgba(55, 65, 81, 0.5);
+        }
+    </style>
+</head>
+
+<body class="min-h-screen p-4 md:p-8 selection:bg-blue-500 selection:text-white">
+    <div id="app" class="max-w-[1800px] mx-auto space-y-6">
+
+        <!-- Header -->
+        <header class="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
+            <div>
+                <h1
+                    class="text-4xl font-extrabold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-500 mb-2">
+                    Market Valuation <span class="text-gray-600 font-light mx-2">|</span>
+                    <span class="text-blue-400 text-2xl font-normal" id="mispricingModeLabel">(raw)</span>
+                </h1>
+                <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-gray-400">
+                    <div class="flex items-center gap-2">
+                        <span class="w-2 h-2 rounded-full bg-green-500"></span>
+                        <span>Generated: <span id="generatedAt" class="text-gray-300">Loading...</span></span>
+                    </div>
+                    <div class="hidden md:block w-[1px] h-4 bg-gray-700"></div>
+                    <div>Quarter: <span id="quarterDate" class="text-gray-300 font-medium"></span></div>
+                    <div class="hidden md:block w-[1px] h-4 bg-gray-700"></div>
+                    <div>Metric: <span id="metricDesc" class="text-gray-300 italic"></span></div>
+                </div>
+            </div>
+
+            <div
+                class="flex items-center space-x-4 bg-gray-900/80 p-1.5 rounded-lg border border-gray-800 backdrop-blur-sm">
+                <button id="modeRaw"
+                    class="toggle-btn px-4 py-2 text-sm font-medium rounded-md border border-transparent text-gray-400 active">
+                    Raw Mispricing
+                </button>
+                <button id="modeSizeNeutral"
+                    class="toggle-btn px-4 py-2 text-sm font-medium rounded-md border border-transparent text-gray-400">
+                    Size-Neutral
+                </button>
+            </div>
+        </header>
+
+        <!-- KPI Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div class="stat-card p-5 relative overflow-hidden group">
+                <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                    <svg class="w-16 h-16 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                            d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10">
+                        </path>
+                    </svg>
+                </div>
+                <div class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-1">Market Coverage</div>
+                <div class="text-3xl font-bold text-white tracking-tight"><span id="totalTickers">-</span> <span
+                        class="text-base font-normal text-gray-500">tickers</span></div>
+                <div class="text-sm text-gray-500 mt-2 font-mono text-blue-400">$<span id="totalMcap">-</span>T Total
+                    Cap</div>
+            </div>
+
+            <div class="stat-card p-5 relative overflow-hidden">
+                <div class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-1">Median Mispricing</div>
+                <div class="text-3xl font-bold tracking-tight text-white" id="medianMispricing">-</div>
+                <div class="text-sm mt-2 text-gray-500">Avg: <span id="avgMispricing"
+                        class="text-gray-300 font-medium">-</span>%</div>
+            </div>
+
+            <div class="stat-card p-5 relative overflow-hidden">
+                <div class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-1">Undervalued Opps</div>
+                <div class="text-3xl font-bold text-white tracking-tight" id="undervaluedCount">-</div>
+                <div class="text-sm mt-2 text-green-400 font-medium"><span id="undervaluedPct">-</span>% <span
+                        class="text-gray-500 font-normal">of market</span></div>
+            </div>
+
+            <div class="stat-card p-5 relative overflow-hidden">
+                <div class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-1">Indices Tracked</div>
+                <div class="text-3xl font-bold text-white tracking-tight" id="indicesTracked">-</div>
+                <div class="text-sm mt-2 text-gray-500">Global Coverage</div>
+            </div>
+        </div>
+
+        <!-- Main Valuation Chart -->
+        <div class="card p-6 h-[700px] flex flex-col relative">
+            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 z-10 gap-4">
+                <div>
+                    <h3 class="text-xl font-bold text-white">Market Valuation Map</h3>
+                    <p class="text-sm text-gray-400">Actual vs Predicted Market Capitalization (Log Scale)</p>
+                </div>
+                <div class="flex bg-gray-900 rounded-lg p-1 border border-gray-700">
+                    <button id="colorSector"
+                        class="px-3 py-1.5 text-xs font-medium rounded transition-colors text-white bg-gray-700 shadow-sm">By
+                        Sector</button>
+                    <button id="colorMispricing"
+                        class="px-3 py-1.5 text-xs font-medium rounded transition-colors text-gray-400 hover:text-white hover:bg-gray-800">By
+                        Mispricing</button>
+                </div>
+            </div>
+            <div id="valuationChart" class="flex-grow w-full rounded-lg bg-gray-900/30 border border-gray-800/50"></div>
+        </div>
+
+        <!-- Split Row: Sector & Index -->
+        <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+            <div class="card p-6 h-[500px] flex flex-col">
+                <h3 class="text-lg font-bold text-white mb-4">Sector Breakdown</h3>
+                <div id="sectorChart" class="flex-grow rounded-lg bg-gray-900/30"></div>
+            </div>
+            <div class="card p-6 h-[500px] flex flex-col">
+                <h3 class="text-lg font-bold text-white mb-4">Index Mispricing</h3>
+                <div id="indexChart" class="flex-grow rounded-lg bg-gray-900/30"></div>
+            </div>
+        </div>
+
+        <!-- Index Time Series -->
+        <div class="card p-6 h-[450px] flex flex-col">
+            <h3 class="text-lg font-bold text-white mb-4">Index Mispricing History</h3>
+            <div id="indexTimeSeriesChart" class="flex-grow rounded-lg bg-gray-900/30"></div>
+        </div>
+
+        <!-- Signal Quality Analysis -->
+        <div class="card p-6">
+            <h3 class="text-xl font-bold text-white mb-6 border-b border-gray-800 pb-4">Signal Quality Analysis</h3>
+
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-6 mb-6">
+                <div class="h-[400px] flex flex-col">
+                    <h4 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">Sector IC by Horizon
+                    </h4>
+                    <div id="icSectorChart" class="flex-grow rounded-lg bg-gray-900/30 border border-gray-800/50"></div>
+                </div>
+                <div class="h-[400px] flex flex-col">
+                    <h4 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">Index IC by Horizon
+                    </h4>
+                    <div id="icIndexChart" class="flex-grow rounded-lg bg-gray-900/30 border border-gray-800/50"></div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                <div class="xl:col-span-1 h-[400px] flex flex-col">
+                    <h4 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">Signal Decay (Global)
+                    </h4>
+                    <div id="icHorizonChart" class="flex-grow rounded-lg bg-gray-900/30 border border-gray-800/50">
+                    </div>
+                </div>
+                <div
+                    class="xl:col-span-2 h-[400px] flex flex-col overflow-hidden rounded-lg border border-gray-800 bg-gray-900/30">
+                    <div class="p-3 border-b border-gray-800 bg-gray-900/50">
+                        <h4 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Signal Quality Summary
+                        </h4>
+                    </div>
+                    <div class="overflow-y-auto flex-grow p-0">
+                        <table class="w-full text-sm text-left">
+                            <thead class="text-xs text-gray-500 uppercase bg-gray-900 sticky top-0 z-10 shadow-sm">
+                                <tr>
+                                    <th class="py-3 px-4 bg-gray-900">Group</th>
+                                    <th class="py-3 px-2 text-right bg-gray-900">N</th>
+                                    <th class="py-3 px-2 text-right bg-gray-900">Horizon</th>
+                                    <th class="py-3 px-2 text-right bg-gray-900">IC</th>
+                                    <th class="py-3 px-2 text-right bg-gray-900">Spread</th>
+                                    <th class="py-3 px-4 text-right bg-gray-900">Hit%</th>
+                                </tr>
+                            </thead>
+                            <tbody id="signalQualityTable" class="text-gray-300 divide-y divide-gray-800"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Uncertainty & Size Premium -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div class="card p-6 h-[450px] flex flex-col">
+                <h3 class="text-lg font-bold text-white mb-4">Model Uncertainty vs Error</h3>
+                <div id="uncertaintyChart" class="flex-grow rounded-lg bg-gray-900/30"></div>
+            </div>
+            <div class="card p-6 h-[450px] flex flex-col">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-lg font-bold text-white">Size Premium Trend</h3>
+                </div>
+                <div id="sizePremiumChart" class="flex-grow rounded-lg bg-gray-900/30"></div>
+            </div>
+        </div>
+
+        <!-- Tables Row -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-12">
+            <div class="card p-0 flex flex-col overflow-hidden h-[500px]">
+                <div class="p-5 border-b border-gray-800 bg-gray-900/50">
+                    <h3 class="text-lg font-bold text-green-400 flex items-center gap-2">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path>
+                        </svg>
+                        Top Undervalued
+                    </h3>
+                </div>
+                <div class="overflow-x-auto flex-grow">
+                    <table class="w-full text-sm text-left">
+                        <thead class="text-xs text-gray-500 uppercase bg-gray-900 sticky top-0">
+                            <tr>
+                                <th class="py-3 px-5 bg-gray-900">Ticker</th>
+                                <th class="py-3 px-2 bg-gray-900">Company</th>
+                                <th class="py-3 px-2 text-right bg-gray-900">Mispricing</th>
+                                <th class="py-3 px-5 text-right bg-gray-900">Mcap</th>
+                            </tr>
+                        </thead>
+                        <tbody id="undervaluedTable" class="text-gray-300 divide-y divide-gray-800"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="card p-0 flex flex-col overflow-hidden h-[500px]">
+                <div class="p-5 border-b border-gray-800 bg-gray-900/50">
+                    <h3 class="text-lg font-bold text-red-400 flex items-center gap-2">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M13 17h8m0 0V9m0 8l-8-8-4 4-6-6"></path>
+                        </svg>
+                        Top Overvalued
+                    </h3>
+                </div>
+                <div class="overflow-x-auto flex-grow">
+                    <table class="w-full text-sm text-left">
+                        <thead class="text-xs text-gray-500 uppercase bg-gray-900 sticky top-0">
+                            <tr>
+                                <th class="py-3 px-5 bg-gray-900">Ticker</th>
+                                <th class="py-3 px-2 bg-gray-900">Company</th>
+                                <th class="py-3 px-2 text-right bg-gray-900">Mispricing</th>
+                                <th class="py-3 px-5 text-right bg-gray-900">Mcap</th>
+                            </tr>
+                        </thead>
+                        <tbody id="overvaluedTable" class="text-gray-300 divide-y divide-gray-800"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Application Logic -->
+    <script src="app.js"></script>
+</body>
+
+</html>

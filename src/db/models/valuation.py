@@ -13,7 +13,8 @@ class ValuationResult(Base):
     predicted_mcap_mean = Column(Numeric, nullable=False)
     predicted_mcap_std = Column(Numeric, nullable=False)
     actual_mcap = Column(Numeric, nullable=False)
-    relative_error = Column(Numeric, nullable=False)
+    relative_error = Column(Numeric, nullable=False)  # Raw mispricing
+    residual_error = Column(Numeric, nullable=True)   # Size-corrected mispricing (nullable for backfill)
     relative_std = Column(Numeric, nullable=False)
     
     # Model metadata

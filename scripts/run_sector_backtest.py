@@ -70,6 +70,7 @@ def get_valuations_with_metadata(session, snapshot_date: date) -> pd.DataFrame:
         Ticker.sector,
         ValuationResult.actual_mcap,
         ValuationResult.predicted_mcap_mean,
+        ValuationResult.residual_error,
     ).join(
         Ticker, ValuationResult.ticker == Ticker.ticker
     ).filter(
@@ -77,7 +78,15 @@ def get_valuations_with_metadata(session, snapshot_date: date) -> pd.DataFrame:
     )
     
     df = pd.read_sql(query.statement, session.bind)
-    df["overpriciness"] = (df["actual_mcap"] - df["predicted_mcap_mean"]) / df["predicted_mcap_mean"]
+    
+    # Raw signal: Mispricing (Predicted - Actual) / Actual = Relative Error
+    # If > 0, stock is cheap/underpriced. Expect POSITIVE deviation/return.
+    df["signal_raw"] = (df["predicted_mcap_mean"] - df["actual_mcap"]) / df["actual_mcap"]
+    
+    # Residual signal: Size-neutral mispricing
+    # stored as (Pred_Corrected - Actual) / Actual (Underpriciness)
+    # We use it directly so Positive IC = Good
+    df["signal_residual"] = df["residual_error"]
     
     # Get index memberships for each ticker
     memberships = session.query(
@@ -128,6 +137,14 @@ def compute_group_metrics(
         
         signal_arr = np.array(signal_list)
         returns_arr = np.array(returns_list)
+        
+        # Filter NaNs in signal
+        valid_mask = np.isfinite(signal_arr)
+        if np.sum(valid_mask) < 10:
+            continue
+            
+        signal_arr = signal_arr[valid_mask]
+        returns_arr = returns_arr[valid_mask]
         
         ic, ic_pval = compute_ic(signal_arr, returns_arr)
         quantile_returns = compute_quantile_returns(signal_arr, returns_arr)
@@ -185,39 +202,42 @@ def main():
             prices = fetch_and_cache_prices(session, tickers, start_date, end_date, batch_size=100)
             logger.info(f"  Got prices for {len(prices)} tickers")
             
-            # 2. Compute by SECTOR
-            for sector in df["sector"].dropna().unique():
-                sector_df = df[df["sector"] == sector]
-                sector_tickers = sector_df["ticker"].tolist()
-                sector_signal = sector_df["overpriciness"].values
+            # Loop for both metric types
+            for metric, signal_col in [("raw", "signal_raw"), ("residual", "signal_residual")]:
                 
-                metrics = compute_group_metrics(sector_tickers, sector_signal, prices, q_date, HORIZONS)
-                for m in metrics:
-                    m["group_type"] = "sector"
-                    m["group_name"] = sector
-                    m["quarter"] = q_date
-                    all_results.append(m)
-            
-            # 3. Compute by INDEX
-            # Get all indices
-            indices = session.query(IndexMembership.index_id).distinct().all()
-            indices = [i[0] for i in indices]
-            
-            for index_id in indices:
-                # Filter to tickers in this index
-                idx_df = df[df["indices"].apply(lambda x: index_id in x)]
-                if len(idx_df) < 10:
-                    continue
+                # 2. Compute by SECTOR
+                for sector in df["sector"].dropna().unique():
+                    sector_df = df[df["sector"] == sector]
+                    sector_tickers = sector_df["ticker"].tolist()
+                    sector_signal = sector_df[signal_col].values
+                    
+                    metrics = compute_group_metrics(sector_tickers, sector_signal, prices, q_date, HORIZONS)
+                    for m in metrics:
+                        m["metric"] = metric
+                        m["group_type"] = "sector"
+                        m["group_name"] = sector
+                        m["quarter"] = q_date
+                        all_results.append(m)
                 
-                idx_tickers = idx_df["ticker"].tolist()
-                idx_signal = idx_df["overpriciness"].values
+                # 3. Compute by INDEX
+                indices = session.query(IndexMembership.index_id).distinct().all()
+                indices = [i[0] for i in indices]
                 
-                metrics = compute_group_metrics(idx_tickers, idx_signal, prices, q_date, HORIZONS)
-                for m in metrics:
-                    m["group_type"] = "index"
-                    m["group_name"] = index_id
-                    m["quarter"] = q_date
-                    all_results.append(m)
+                for index_id in indices:
+                    idx_df = df[df["indices"].apply(lambda x: index_id in x)]
+                    if len(idx_df) < 10:
+                        continue
+                    
+                    idx_tickers = idx_df["ticker"].tolist()
+                    idx_signal = idx_df[signal_col].values
+                    
+                    metrics = compute_group_metrics(idx_tickers, idx_signal, prices, q_date, HORIZONS)
+                    for m in metrics:
+                        m["metric"] = metric
+                        m["group_type"] = "index"
+                        m["group_name"] = index_id
+                        m["quarter"] = q_date
+                        all_results.append(m)
         
         if not all_results:
             logger.error("No results!")
@@ -227,7 +247,7 @@ def main():
         results_df = pd.DataFrame(all_results)
         
         # Aggregate across quarters
-        summary = results_df.groupby(["group_type", "group_name", "horizon"]).agg({
+        summary = results_df.groupby(["metric", "group_type", "group_name", "horizon"]).agg({
             "n_obs": "sum",
             "ic": "mean",
             "ic_pval": "mean",
@@ -238,25 +258,16 @@ def main():
             "ls_return": "mean",
         }).reset_index()
         
-        # 5. Display results
+        # 5. Display results (Raw only for summary to avoid noise)
         print("\n" + "=" * 95)
-        print("SIGNAL QUALITY BY SECTOR")
+        print("SIGNAL QUALITY BY SECTOR (RAW)")
         print("=" * 95)
-        _print_group_table(summary[summary["group_type"] == "sector"])
+        _print_group_table(summary[(summary["group_type"] == "sector") & (summary["metric"] == "raw")])
         
         print("\n" + "=" * 95)
-        print("SIGNAL QUALITY BY INDEX")
+        print("SIGNAL QUALITY BY INDEX (RAW)")
         print("=" * 95)
-        _print_group_table(summary[summary["group_type"] == "index"])
-        
-        # 6. Find strongest signals overall
-        print("\n" + "=" * 95)
-        print("STRONGEST SIGNALS (|IC| > 0.03)")
-        print("=" * 95)
-        strong = summary[abs(summary["ic"]) > 0.03].sort_values("ic_pval")
-        for _, row in strong.head(20).iterrows():
-            sig = "*" if row["ic_pval"] < 0.05 else ("~" if row["ic_pval"] < 0.10 else "")
-            print(f"  [{row['group_type']:<6}] {row['group_name']:<22} @ {int(row['horizon']):>2}d: IC={row['ic']:+.3f}{sig}")
+        _print_group_table(summary[(summary["group_type"] == "index") & (summary["metric"] == "raw")])
         
         # Save
         import os

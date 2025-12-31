@@ -26,8 +26,12 @@ notes.txt
 !debug_error.log
 
 .artifacts
-.arch
 .claude
 data/
 
 plots/
+
+node_modules
+dist
+
+.arch

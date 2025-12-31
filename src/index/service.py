@@ -282,6 +282,7 @@ class IndexService:
         query = self.session.query(
             ValuationResult.ticker,
             ValuationResult.relative_error,
+            ValuationResult.residual_error,
             ValuationResult.actual_mcap,
             ValuationResult.predicted_mcap_mean,
             ValuationResult.snapshot_timestamp,
@@ -321,11 +322,26 @@ class IndexService:
             return None
 
         mispricing = (total_predicted - total_actual) / total_actual
+        
+        # Compute residual (size-corrected) Index Mispricing
+        # We define this as the cap-weighted average of individual residual errors
+        # residual_error = relative_error - size_bias
+        # Index Residual = Sum(w_i * residual_error_i) where w_i = cap_i / total_cap
+        
+        residual_mispricing = None
+        if "residual_error" in results.columns and not results["residual_error"].isna().all():
+            # Fill NA with relative_error if some are missing (partial coverage)
+            # Or just drop? Let's fill with relative_error (assuming 0 bias if missing)
+            res_errors = results["residual_error"].fillna(results["relative_error"])
+            weights = results["actual_mcap"] / total_actual
+            residual_mispricing = float((weights * res_errors).sum())
+
         status = "UNDERPRICED" if mispricing > 0 else "OVERPRICED"
 
         return IndexAnalysis(
             index=index_id,
             mispricing=mispricing,
+            residual_mispricing=residual_mispricing,
             status=status,
             total_actual=total_actual,
             total_predicted=total_predicted,

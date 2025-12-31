@@ -19,6 +19,18 @@ import pandas as pd
 from src.db.session import SessionLocal
 from src.db.models import Ticker, ValuationResult
 from src.index import IndexService, IndexAnalysis
+from src.config.metrics import (
+    ACTIVE_MISPRICING_METRIC,
+    MispricingMetric,
+    get_metric_info,
+    compute_mispricing,
+)
+from src.valuation.size_correction import (
+    apply_size_correction, 
+    SizeCorrectionResult,
+    estimate_size_coefficient,
+    SizeCoefficient,
+)
 
 # Backtest data path
 BACKTEST_SUMMARY_PATH = "data/signal_backtest_summary.csv"
@@ -89,6 +101,7 @@ def get_valuation_data_with_sectors(quarter_date: datetime = None) -> pd.DataFra
             ValuationResult.predicted_mcap_mean,
             ValuationResult.predicted_mcap_std,
             ValuationResult.relative_error,
+            ValuationResult.residual_error,
             ValuationResult.relative_std,
             ValuationResult.snapshot_timestamp,
             Ticker.sector,
@@ -111,6 +124,10 @@ def get_valuation_data_with_sectors(quarter_date: datetime = None) -> pd.DataFra
         # Clean sector data
         df["sector"] = df["sector"].fillna("Unknown")
         df["sector"] = df["sector"].replace("", "Unknown")
+        
+        # Handle null residual_error (fallback to relative_error if not computed)
+        if "residual_error" in df.columns:
+            df["residual_error"] = df["residual_error"].fillna(df["relative_error"])
 
         return df
     finally:
@@ -169,6 +186,8 @@ def get_index_mispricing_timeseries() -> List[Dict[str, Any]]:
                     ValuationResult.ticker,
                     ValuationResult.actual_mcap,
                     ValuationResult.predicted_mcap_mean,
+                    ValuationResult.relative_error,
+                    ValuationResult.residual_error,
                 ).join(
                     IndexMembership,
                     IndexMembership.ticker == ValuationResult.ticker,
@@ -195,10 +214,20 @@ def get_index_mispricing_timeseries() -> List[Dict[str, Any]]:
                 
                 if total_actual > 0 and count >= 5:  # At least 5 stocks for meaningful data
                     mispricing = (total_predicted - total_actual) / total_actual
+                    
+                    # Compute residual mispricing (cap-weighted average of residual errors)
+                    residual_mispricing = mispricing # Fallback
+                    if 'residual_error' in df.columns:
+                        # Fill NA with relative_error where residual_error is missing
+                        df['residual_error'] = df['residual_error'].fillna(df['relative_error'])
+                        weights = df['actual_mcap'] / total_actual
+                        residual_mispricing = float((weights * df['residual_error']).sum())
+                    
                     results.append({
                         "index": index_id,
                         "date": quarter_date.strftime("%Y-%m-%d"),
                         "mispricing": mispricing,
+                        "residualMispricing": residual_mispricing,
                         "count": count,
                     })
         
@@ -206,6 +235,57 @@ def get_index_mispricing_timeseries() -> List[Dict[str, Any]]:
     finally:
         session.close()
 
+
+def get_per_quarter_size_coefficients() -> List[Dict[str, Any]]:
+    """
+    Compute size premium coefficients for each quarter.
+    
+    Returns list of dicts with quarter, slope, SE, t-stat, p-value.
+    """
+    from sqlalchemy import func
+    
+    session = SessionLocal()
+    try:
+        # Get all quarters with significant valuations
+        quarter_dates = session.query(
+            ValuationResult.snapshot_timestamp
+        ).group_by(
+            ValuationResult.snapshot_timestamp
+        ).having(
+            func.count(func.distinct(ValuationResult.ticker)) > 100
+        ).order_by(
+            ValuationResult.snapshot_timestamp
+        ).all()
+        
+        coefficients = []
+        for (quarter_date,) in quarter_dates:
+            # Get valuations for this quarter
+            query = session.query(
+                ValuationResult.actual_mcap,
+                ValuationResult.relative_error,
+            ).filter(
+                ValuationResult.snapshot_timestamp == quarter_date,
+                ValuationResult.actual_mcap > 0,
+            )
+            
+            df = pd.read_sql(query.statement, session.bind)
+            
+            if len(df) < 50:
+                continue
+            
+            # Estimate coefficient
+            coef = estimate_size_coefficient(
+                mispricing=df["relative_error"].values,
+                market_cap=df["actual_mcap"].values,
+                quarter=quarter_date.strftime("%Y-%m-%d"),
+            )
+            
+            if coef:
+                coefficients.append(coef.to_dict())
+        
+        return coefficients
+    finally:
+        session.close()
 
 def get_backtest_data() -> Dict[str, Any]:
     """Load backtest detailed data for time-series IC visualization."""
@@ -216,7 +296,7 @@ def get_backtest_data() -> Dict[str, Any]:
 
     df = pd.read_csv(detailed_path)
 
-    # Build time-series data for scatter plots (individual quarter-horizon-group points)
+    # Build time-series data for scatter plots (individual    # Build time-series data points for scatter plot
     def build_timeseries(group_df: pd.DataFrame, min_samples_per_point: int = 30) -> List[Dict]:
         """Build time-series data points for scatter plot."""
         results = []
@@ -240,6 +320,7 @@ def get_backtest_data() -> Dict[str, Any]:
                 "n_obs": int(row["n_obs"]),
                 "spread": float(row["spread"]) if pd.notna(row.get("spread")) else 0.0,
                 "hit_rate": float(row["hit_rate"]) if pd.notna(row.get("hit_rate")) else 0.5,
+                "metric": row.get("metric", "raw"),
             })
         
         # Sort by quarter for proper time ordering
@@ -250,35 +331,43 @@ def get_backtest_data() -> Dict[str, Any]:
     def aggregate_group(group_df: pd.DataFrame, min_samples: int = 100) -> List[Dict]:
         """Aggregate across quarters, keep only groups with enough data."""
         results = []
-        for horizon in [10, 30, 60, 90]:
-            h_df = group_df[group_df["horizon"] == horizon]
-            if h_df.empty:
-                continue
-
-            for name in h_df["group_name"].unique():
-                name_df = h_df[h_df["group_name"] == name]
-                total_n = name_df["n_obs"].sum()
-
-                if total_n < min_samples:
+        
+        # Get available metrics (default to ['raw'] if column missing)
+        metrics = group_df["metric"].unique() if "metric" in group_df.columns else ["raw"]
+        
+        for metric in metrics:
+            m_df = group_df[group_df.get("metric", "raw") == metric] if "metric" in group_df.columns else group_df
+            
+            for horizon in [10, 30, 60, 90]:
+                h_df = m_df[m_df["horizon"] == horizon]
+                if h_df.empty:
                     continue
 
-                weights = name_df["n_obs"].values
-                avg_ic = np.average(name_df["ic"].values, weights=weights)
-                avg_spread = np.average(name_df["spread"].values, weights=weights) if "spread" in name_df.columns else 0
-                avg_hit_rate = np.average(name_df["hit_rate"].values, weights=weights) if "hit_rate" in name_df.columns else 0.5
-                median_pval = name_df["ic_pval"].median()
+                for name in h_df["group_name"].unique():
+                    name_df = h_df[h_df["group_name"] == name]
+                    total_n = name_df["n_obs"].sum()
 
-                results.append({
-                    "name": name,
-                    "horizon": horizon,
-                    "ic": float(avg_ic),
-                    "pval": float(median_pval),
-                    "n_obs": int(total_n),
-                    "spread": float(avg_spread),
-                    "hit_rate": float(avg_hit_rate),
-                    "significant": bool(median_pval < 0.05),
-                    "marginal": bool(0.05 <= median_pval < 0.10),
-                })
+                    if total_n < min_samples:
+                        continue
+
+                    weights = name_df["n_obs"].values
+                    avg_ic = np.average(name_df["ic"].values, weights=weights)
+                    avg_spread = np.average(name_df["spread"].values, weights=weights) if "spread" in name_df.columns else 0
+                    avg_hit_rate = np.average(name_df["hit_rate"].values, weights=weights) if "hit_rate" in name_df.columns else 0.5
+                    median_pval = name_df["ic_pval"].median()
+
+                    results.append({
+                        "name": name,
+                        "horizon": horizon,
+                        "ic": float(avg_ic),
+                        "pval": float(median_pval),
+                        "n_obs": int(total_n),
+                        "spread": float(avg_spread),
+                        "hit_rate": float(avg_hit_rate),
+                        "significant": bool(median_pval < 0.05),
+                        "marginal": bool(0.05 <= median_pval < 0.10),
+                        "metric": metric,
+                    })
 
         return results
 
@@ -286,20 +375,21 @@ def get_backtest_data() -> Dict[str, Any]:
     sector_df = df[df["group_type"] == "sector"]
     sector_ts = build_timeseries(sector_df)
     sector_all = aggregate_group(sector_df, min_samples=100)
-    sector_summary = [s for s in sector_all if s["horizon"] == 30]
-    sector_summary = sorted(sector_summary, key=lambda x: x["ic"], reverse=True)
+    # Return all summaries, filtering by metric happens in JS
+    sector_summary = sector_all 
 
     index_df = df[df["group_type"] == "index"]
     index_ts = build_timeseries(index_df)
     index_all = aggregate_group(index_df, min_samples=100)
-    index_summary = [s for s in index_all if s["horizon"] == 30]
-    index_summary = sorted(index_summary, key=lambda x: x["ic"], reverse=True)
+    index_summary = index_all
 
-    # Horizon comparison (IC decay)
+    # Horizon comparison (IC decay) - Compute for RAW metric only to avoid noise
     horizon_data = []
-    all_data = sector_all + index_all
+    # Filter for Raw only
+    all_raw = [d for d in sector_all + index_all if d.get("metric", "raw") == "raw"]
+    
     for horizon in [10, 30, 60, 90]:
-        h_items = [d for d in all_data if d["horizon"] == horizon]
+        h_items = [d for d in all_raw if d["horizon"] == horizon]
         if h_items:
             weights = [d["n_obs"] for d in h_items]
             avg_ic = np.average([d["ic"] for d in h_items], weights=weights)
@@ -322,6 +412,7 @@ def get_backtest_data() -> Dict[str, Any]:
 def compute_summary_stats(
     valuation_df: pd.DataFrame,
     index_data: List[IndexAnalysis],
+    size_correction: Optional[SizeCorrectionResult] = None,
 ) -> Dict[str, Any]:
     """Compute dashboard summary statistics."""
     total_tickers = len(valuation_df)
@@ -343,6 +434,18 @@ def compute_summary_stats(
         else:
             quarter_date_str = str(quarter_date)[:10]
 
+    # Get active metric info
+    metric_info = get_metric_info()
+    
+    # Size premium info if available
+    size_premium_info = None
+    if size_correction:
+        size_premium_info = {
+            "method": size_correction.size_premium_estimate.estimation_method,
+            "n_obs": size_correction.size_premium_estimate.n_observations,
+            "smoothing": size_correction.size_premium_estimate.smoothing_frac,
+        }
+
     return {
         "total_tickers": total_tickers,
         "total_actual_mcap_t": total_actual_mcap / 1e12,
@@ -353,45 +456,75 @@ def compute_summary_stats(
         "median_mispricing_pct": median_mispricing * 100,
         "indices_tracked": len(index_data),
         "quarter_date": quarter_date_str,
+        # Metric info
+        "metric_name": metric_info.name,
+        "metric_formula": metric_info.formula,
+        "metric_description": metric_info.description,
+        # Size premium
+        "size_premium": size_premium_info,
     }
 
 
-def generate_dashboard_html(
+def build_and_save_dashboard_data(
     valuation_df: pd.DataFrame,
     index_data: List[IndexAnalysis],
     stats: Dict[str, Any],
     backtest_data: Dict[str, Any],
     index_timeseries: List[Dict[str, Any]] = None,
-) -> str:
-    """Generate the complete dashboard HTML."""
+    size_correction: Optional[SizeCorrectionResult] = None,
+    size_coefficients: List[Dict[str, Any]] = None,
+) -> None:
+    """Build dashboard data dictionary and save to JSON."""
+
+    # Prepare size premium curve data
+    size_premium_curve = []
+    if size_correction:
+        est = size_correction.size_premium_estimate
+        # Sample points along the curve for plotting
+        if hasattr(est, 'log_mcap_grid'):
+             for i in range(0, len(est.log_mcap_grid), max(1, len(est.log_mcap_grid) // 50)):
+                size_premium_curve.append({
+                    "logMcap": float(est.log_mcap_grid[i]),
+                    "mcapB": float(np.exp(est.log_mcap_grid[i])) / 1e9,
+                    "expectedMispricing": float(est.expected_mispricing[i]),
+                })
 
     # Prepare valuation scatter data
     scatter_data = []
-    for _, row in valuation_df.iterrows():
+    for idx, (_, row) in enumerate(valuation_df.iterrows()):
         actual_b = float(row["actual_mcap"]) / 1e9
         predicted_b = float(row["predicted_mcap_mean"]) / 1e9
         mispricing = float(row["relative_error"])
+        # Get residual (size-neutral) mispricing from DB
+        residual_mispricing = float(row["residual_error"]) if pd.notna(row["residual_error"]) else mispricing
+        rel_std = float(row["relative_std"]) if pd.notna(row["relative_std"]) else 0.0
         sector = row["sector"] if row["sector"] else "Unknown"
-
+        
         scatter_data.append({
             "ticker": row["ticker"],
             "actual": actual_b,
             "predicted": predicted_b,
             "mispricing": mispricing,
+            "residualMispricing": residual_mispricing,
+            "relStd": rel_std,
             "mispricingPct": f"{mispricing*100:.1f}%",
+            "residualMispricingPct": f"{residual_mispricing*100:.1f}%",
             "sector": sector,
             "company": row["company_name"] or row["ticker"],
             "industry": row["industry"] or "N/A",
             "sectorColor": SECTOR_COLORS.get(sector, SECTOR_COLORS["Unknown"]),
         })
 
-    # Prepare index bar chart data from IndexAnalysis objects
+    # Prepare index bar chart data
     index_chart_data = []
     for analysis in index_data:
+        res_misc = analysis.residual_mispricing if analysis.residual_mispricing is not None else analysis.mispricing
         index_chart_data.append({
             "index": analysis.index,
             "mispricing": analysis.mispricing,
+            "residualMispricing": res_misc,
             "mispricingPct": f"{analysis.mispricing*100:.2f}%",
+            "residualMispricingPct": f"{res_misc*100:.2f}%",
             "color": "#10b981" if analysis.mispricing > 0 else "#ef4444",
             "status": analysis.status,
             "totalActual": f"${analysis.total_actual/1e9:,.1f}B",
@@ -399,10 +532,6 @@ def generate_dashboard_html(
             "count": analysis.count,
             "officialCount": analysis.official_count,
         })
-
-    # Get top movers
-    top_undervalued = sorted(scatter_data, key=lambda x: x["mispricing"], reverse=True)[:10]
-    top_overvalued = sorted(scatter_data, key=lambda x: x["mispricing"])[:10]
 
     # Sector breakdown
     sector_stats = valuation_df.groupby("sector").agg({
@@ -422,739 +551,39 @@ def generate_dashboard_html(
         })
     sector_breakdown = sorted(sector_breakdown, key=lambda x: x["totalMcap"], reverse=True)
 
-    html = f'''<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mispriced - Market Valuation Dashboard</title>
-    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        :root {{
-            --bg-primary: #0a0c10;
-            --bg-secondary: #12151a;
-            --bg-card: #1a1d24;
-            --border-color: #2a2e38;
-            --text-primary: #e8eaed;
-            --text-secondary: #8b919a;
-            --text-muted: #5a6069;
-            --accent-green: #00a86b;
-            --accent-red: #d94545;
-            --accent-blue: #4a90d9;
-            --accent-amber: #c9a227;
-        }}
-        body {{
-            background: var(--bg-primary);
-            color: var(--text-primary);
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-        }}
-        .card {{
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 4px;
-        }}
-        .stat-card {{
-            background: var(--bg-card);
-            border: 1px solid var(--border-color);
-        }}
-        .positive {{ color: var(--accent-green); }}
-        .negative {{ color: var(--accent-red); }}
-        .table-row:hover {{ background: rgba(255,255,255,0.03); }}
-        .toggle-btn {{
-            transition: all 0.15s ease;
-            border: 1px solid var(--border-color);
-        }}
-        .toggle-btn.active {{
-            background: var(--accent-blue);
-            border-color: var(--accent-blue);
-            color: white;
-        }}
-        .toggle-btn:not(.active) {{
-            background: var(--bg-card);
-            color: var(--text-secondary);
-        }}
-        .toggle-btn:not(.active):hover {{
-            background: var(--bg-secondary);
-        }}
-        h1, h2, h3 {{
-            font-weight: 500;
-            letter-spacing: -0.01em;
-        }}
-        .legend-item {{
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 4px 8px;
-            background: var(--bg-card);
-            border-radius: 3px;
-            font-size: 11px;
-        }}
-    </style>
-</head>
-<body class="min-h-screen">
-    <!-- Header -->
-    <header class="border-b border-gray-800 px-6 py-4">
-        <div class="max-w-7xl mx-auto flex items-center justify-between">
-            <div>
-                <h1 class="text-2xl font-bold text-white">Mispriced</h1>
-                <p class="text-sm text-gray-400">Market Valuation Dashboard</p>
-            </div>
-            <div class="text-right text-sm text-gray-400">
-                <div>Quarter: <span class="text-white font-medium">{stats["quarter_date"]}</span></div>
-                <div>{stats["total_tickers"]:,} tickers analyzed</div>
-                <div class="text-xs text-gray-500">Generated: <span id="timestamp"></span></div>
-            </div>
-        </div>
-    </header>
 
-    <main class="max-w-7xl mx-auto px-6 py-8">
-        <!-- Summary Stats -->
-        <section class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-            <div class="stat-card card p-4">
-                <div class="text-sm text-gray-400 mb-1">Total Market Cap (Actual)</div>
-                <div class="text-2xl font-bold">${stats["total_actual_mcap_t"]:.2f}T</div>
-            </div>
-            <div class="stat-card card p-4">
-                <div class="text-sm text-gray-400 mb-1">Total Market Cap (Predicted)</div>
-                <div class="text-2xl font-bold">${stats["total_predicted_mcap_t"]:.2f}T</div>
-            </div>
-            <div class="stat-card card p-4">
-                <div class="text-sm text-gray-400 mb-1">Undervalued / Overvalued</div>
-                <div class="text-2xl font-bold">
-                    <span class="positive">{stats["undervalued_count"]:,}</span>
-                    <span class="text-gray-500">/</span>
-                    <span class="negative">{stats["overvalued_count"]:,}</span>
-                </div>
-            </div>
-            <div class="stat-card card p-4">
-                <div class="text-sm text-gray-400 mb-1">Avg Mispricing</div>
-                <div class="text-2xl font-bold {'positive' if stats["avg_mispricing_pct"] > 0 else 'negative'}">
-                    {stats["avg_mispricing_pct"]:+.2f}%
-                </div>
-            </div>
-        </section>
+    # Construct final payload
+    payload = {
+        "generated_at": datetime.now().isoformat(),
+        "stats": stats,
+        "scatter_data": scatter_data,
+        "index_chart_data": index_chart_data,
+        "sector_breakdown": sector_breakdown,
+        "backtest_data": backtest_data,
+        "index_timeseries": index_timeseries,
+        "size_premium_curve": size_premium_curve,
+        "size_coefficients": size_coefficients,
+    }
 
-        <!-- Charts Row -->
-        <section class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-            <!-- Index Mispricing Chart -->
-            <div class="card p-4">
-                <h2 class="text-lg font-semibold mb-4">Index Mispricing (Current)</h2>
-                <div id="indexChart" style="height: 350px;"></div>
-            </div>
-
-            <!-- Index Mispricing Over Time -->
-            <div class="card p-4">
-                <h2 class="text-lg font-semibold mb-4">Index Mispricing Over Time</h2>
-                <div id="indexTimeSeriesChart" style="height: 350px;"></div>
-            </div>
-        </section>
-
-        <!-- Valuation Charts Row -->
-        <section class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-            <div class="card p-4">
-                <div class="flex items-center justify-between mb-4">
-                    <h2 class="text-lg font-semibold">Stock Valuations</h2>
-                    <div class="flex gap-2">
-                        <button id="colorByMispricing" class="toggle-btn active px-3 py-1 rounded text-sm">
-                            Color by Mispricing
-                        </button>
-                        <button id="colorBySector" class="toggle-btn px-3 py-1 rounded text-sm">
-                            Color by Sector
-                        </button>
-                    </div>
-                </div>
-                <div id="valuationChart" style="height: 400px;"></div>
-            </div>
-        </section>
-
-        <!-- Sector Breakdown with Legend -->
-        <section class="card p-4 mb-8">
-            <h2 class="text-lg font-semibold mb-4">Sector Breakdown</h2>
-            <div id="sectorChart" style="height: 300px;"></div>
-            <div class="mt-4 pt-4 border-t border-gray-700">
-                <div class="flex flex-wrap gap-4" id="sectorLegend"></div>
-            </div>
-        </section>
-
-        <!-- Tables Row -->
-        <section class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-            <!-- Top Undervalued -->
-            <div class="card p-4">
-                <h2 class="text-lg font-semibold mb-4 positive">Top Undervalued Stocks</h2>
-                <div class="overflow-x-auto">
-                    <table class="w-full text-sm">
-                        <thead>
-                            <tr class="text-left text-gray-400 border-b border-gray-700">
-                                <th class="pb-2">Ticker</th>
-                                <th class="pb-2">Sector</th>
-                                <th class="pb-2 text-right">Actual</th>
-                                <th class="pb-2 text-right">Predicted</th>
-                                <th class="pb-2 text-right">Upside</th>
-                            </tr>
-                        </thead>
-                        <tbody id="undervaluedTable"></tbody>
-                    </table>
-                </div>
-            </div>
-
-            <!-- Top Overvalued -->
-            <div class="card p-4">
-                <h2 class="text-lg font-semibold mb-4 negative">Top Overvalued Stocks</h2>
-                <div class="overflow-x-auto">
-                    <table class="w-full text-sm">
-                        <thead>
-                            <tr class="text-left text-gray-400 border-b border-gray-700">
-                                <th class="pb-2">Ticker</th>
-                                <th class="pb-2">Sector</th>
-                                <th class="pb-2 text-right">Actual</th>
-                                <th class="pb-2 text-right">Predicted</th>
-                                <th class="pb-2 text-right">Downside</th>
-                            </tr>
-                        </thead>
-                        <tbody id="overvaluedTable"></tbody>
-                    </table>
-                </div>
-            </div>
-        </section>
-
-        <!-- Signal Quality Section -->
-        <section class="mb-8">
-            <h2 class="text-xl font-medium mb-2 text-white">Signal Quality Analysis</h2>
-            <p class="text-sm text-gray-500 mb-6">Information Coefficient over time by horizon. Larger points indicate higher statistical significance (-log10 p-value).</p>
-
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-                <!-- IC by Sector Time Series -->
-                <div class="card p-4">
-                    <div class="flex items-center justify-between mb-4">
-                        <h3 class="text-base font-medium">Sector IC Time Series</h3>
-                        <div class="flex gap-1">
-                            <span class="legend-item"><span style="width:8px;height:8px;border-radius:50%;background:#4a90d9;"></span>10d</span>
-                            <span class="legend-item"><span style="width:8px;height:8px;border-radius:50%;background:#00a86b;"></span>30d</span>
-                            <span class="legend-item"><span style="width:8px;height:8px;border-radius:50%;background:#c9a227;"></span>60d</span>
-                        </div>
-                    </div>
-                    <div id="icSectorChart" style="height: 400px;"></div>
-                </div>
-
-                <!-- IC by Index Time Series -->
-                <div class="card p-4">
-                    <div class="flex items-center justify-between mb-4">
-                        <h3 class="text-base font-medium">Index IC Time Series</h3>
-                        <div class="flex gap-1">
-                            <span class="legend-item"><span style="width:8px;height:8px;border-radius:50%;background:#4a90d9;"></span>10d</span>
-                            <span class="legend-item"><span style="width:8px;height:8px;border-radius:50%;background:#00a86b;"></span>30d</span>
-                            <span class="legend-item"><span style="width:8px;height:8px;border-radius:50%;background:#c9a227;"></span>60d</span>
-                        </div>
-                    </div>
-                    <div id="icIndexChart" style="height: 400px;"></div>
-                </div>
-            </div>
-
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <!-- IC Decay by Horizon -->
-                <div class="card p-4">
-                    <h3 class="text-lg font-semibold mb-4">IC Decay by Horizon</h3>
-                    <div id="icHorizonChart" style="height: 300px;"></div>
-                </div>
-
-                <!-- Signal Quality Table -->
-                <div class="card p-4">
-                    <h3 class="text-lg font-semibold mb-4">Signal Quality Summary</h3>
-                    <div class="overflow-x-auto">
-                        <table class="w-full text-sm">
-                            <thead>
-                                <tr class="text-left text-gray-400 border-b border-gray-700">
-                                    <th class="pb-2">Group</th>
-                                    <th class="pb-2 text-right">N</th>
-                                    <th class="pb-2 text-right">IC</th>
-                                    <th class="pb-2 text-right">Spread</th>
-                                    <th class="pb-2 text-right">Hit Rate</th>
-                                </tr>
-                            </thead>
-                            <tbody id="signalQualityTable"></tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-        </section>
-    </main>
-
-    <!-- Footer -->
-    <footer class="border-t border-gray-800 px-6 py-4 mt-8">
-        <div class="max-w-7xl mx-auto text-center text-sm text-gray-500">
-            Data sourced from public filings. Valuations are model estimates and not financial advice.
-        </div>
-    </footer>
-
-    <script>
-        // Data
-        const scatterData = {json.dumps(scatter_data)};
-        const indexData = {json.dumps(index_chart_data)};
-        const topUndervalued = {json.dumps(top_undervalued)};
-        const topOvervalued = {json.dumps(top_overvalued)};
-        const sectorBreakdown = {json.dumps(sector_breakdown)};
-        const sectorColors = {json.dumps(SECTOR_COLORS)};
-
-        // Backtest data
-        const backtestSectorTS = {json.dumps(backtest_data["sector_ts"])};
-        const backtestIndexTS = {json.dumps(backtest_data["index_ts"])};
-        const backtestSectorSummary = {json.dumps(backtest_data["sector_summary"])};
-        const backtestIndexSummary = {json.dumps(backtest_data["index_summary"])};
-        const backtestHorizon = {json.dumps(backtest_data["horizon"])};
-
-        // Index mispricing time series
-        const indexTimeSeries = {json.dumps(index_timeseries or [])};
-
-        // Timestamp
-        document.getElementById('timestamp').textContent = new Date().toLocaleString();
-
-        // Plotly professional theme config
-        const darkLayout = {{
-            paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: 'rgba(0,0,0,0)',
-            font: {{ color: '#8b919a', size: 11 }},
-            xaxis: {{ gridcolor: '#2a2e38', zerolinecolor: '#3a3e48', linecolor: '#2a2e38' }},
-            yaxis: {{ gridcolor: '#2a2e38', zerolinecolor: '#3a3e48', linecolor: '#2a2e38' }},
-            margin: {{ t: 30, r: 20, b: 50, l: 55 }},
-        }};
-
-        const config = {{ displayModeBar: false, responsive: true }};
-
-        // Index Bar Chart
-        Plotly.newPlot('indexChart', [{{
-            x: indexData.map(d => d.index),
-            y: indexData.map(d => d.mispricing),
-            type: 'bar',
-            marker: {{ color: indexData.map(d => d.color) }},
-            text: indexData.map(d => d.mispricingPct),
-            textposition: 'auto',
-            textfont: {{ color: '#f1f5f9' }},
-            hovertemplate:
-                '<b>%{{x}}</b><br>' +
-                'Mispricing: %{{text}}<br>' +
-                'Status: %{{customdata[0]}}<br>' +
-                'Coverage: %{{customdata[3]}} / %{{customdata[4]}}<br>' +
-                'Actual: %{{customdata[1]}}<br>' +
-                'Predicted: %{{customdata[2]}}<extra></extra>',
-            customdata: indexData.map(d => [d.status, d.totalActual, d.totalPredicted, d.count, d.officialCount])
-        }}], {{
-            ...darkLayout,
-            yaxis: {{ ...darkLayout.yaxis, title: 'Mispricing %', tickformat: '.1%' }},
-            xaxis: {{ ...darkLayout.xaxis, title: 'Index' }},
-        }}, config);
-
-        // Index Mispricing Over Time Chart
-        if (indexTimeSeries && indexTimeSeries.length > 0) {{
-            // Group by index
-            const indexGroups = {{}};
-            indexTimeSeries.forEach(d => {{
-                if (!indexGroups[d.index]) {{
-                    indexGroups[d.index] = {{ dates: [], values: [], counts: [] }};
-                }}
-                indexGroups[d.index].dates.push(d.date);
-                indexGroups[d.index].values.push(d.mispricing);
-                indexGroups[d.index].counts.push(d.count);
-            }});
-
-            // Color palette for indices
-            const indexColors = {{
-                'SP500': '#3b82f6',
-                'NASDAQ100': '#8b5cf6', 
-                'RUSSELL2000': '#f59e0b',
-                'EUROSTOXX50': '#10b981',
-                'NIKKEI225': '#ef4444',
-                'FTSE100': '#ec4899',
-                'DAX': '#14b8a6',
-                'CAC40': '#f97316',
-                'SMI': '#6366f1',
-                'NIFTY50': '#84cc16',
-                'SSE50': '#06b6d4',
-            }};
-
-            const timeSeriesTraces = Object.entries(indexGroups).map(([indexName, data]) => ({{
-                x: data.dates,
-                y: data.values,
-                type: 'scatter',
-                mode: 'lines+markers',
-                name: indexName,
-                line: {{ color: indexColors[indexName] || '#8b919a', width: 2 }},
-                marker: {{ size: 6 }},
-                hovertemplate: '<b>' + indexName + '</b><br>Date: %{{x}}<br>Mispricing: %{{y:.1%}}<br>Stocks: %{{customdata}}<extra></extra>',
-                customdata: data.counts,
-            }}));
-
-            Plotly.newPlot('indexTimeSeriesChart', timeSeriesTraces, {{
-                ...darkLayout,
-                yaxis: {{ ...darkLayout.yaxis, title: 'Mispricing %', tickformat: '.1%', zeroline: true, zerolinewidth: 2 }},
-                xaxis: {{ ...darkLayout.xaxis, title: 'Quarter' }},
-                legend: {{ orientation: 'h', y: -0.15, font: {{ size: 10 }} }},
-                showlegend: true,
-            }}, config);
-        }}
-
-        // Valuation Scatter Plot
-        let currentColorMode = 'mispricing';
-
-        function getMispricingColor(mispricing) {{
-            // Gradient from red (negative) through neutral to green (positive)
-            const absVal = Math.min(Math.abs(mispricing), 0.5);
-            const intensity = absVal / 0.5;
-            if (mispricing > 0) {{
-                return `rgba(16, 185, 129, ${{0.3 + intensity * 0.7}})`;
-            }} else {{
-                return `rgba(239, 68, 68, ${{0.3 + intensity * 0.7}})`;
-            }}
-        }}
-
-        function renderValuationChart(colorBy) {{
-            let colors, showLegend = false;
-            let traces = [];
-
-            if (colorBy === 'sector') {{
-                // Group by sector for legend
-                const sectors = [...new Set(scatterData.map(d => d.sector))];
-                sectors.forEach(sector => {{
-                    const sectorPoints = scatterData.filter(d => d.sector === sector);
-                    traces.push({{
-                        x: sectorPoints.map(d => d.actual),
-                        y: sectorPoints.map(d => d.mispricing * 100),
-                        mode: 'markers',
-                        type: 'scatter',
-                        name: sector,
-                        marker: {{
-                            color: sectorColors[sector] || sectorColors['Unknown'],
-                            size: 6,
-                            opacity: 0.7
-                        }},
-                        text: sectorPoints.map(d => d.ticker),
-                        customdata: sectorPoints.map(d => [d.company, d.sector, d.industry, d.mispricingPct, d.predicted]),
-                        hovertemplate:
-                            '<b>%{{text}}</b><br>' +
-                            '%{{customdata[0]}}<br>' +
-                            'Sector: %{{customdata[1]}}<br>' +
-                            'Actual: $%{{x:.2f}}B<br>' +
-                            'Predicted: $%{{customdata[4]:.2f}}B<br>' +
-                            'Mispricing: %{{customdata[3]}}<extra></extra>'
-                    }});
-                }});
-                showLegend = true;
-            }} else {{
-                colors = scatterData.map(d => getMispricingColor(d.mispricing));
-                traces.push({{
-                    x: scatterData.map(d => d.actual),
-                    y: scatterData.map(d => d.mispricing * 100),
-                    mode: 'markers',
-                    type: 'scatter',
-                    marker: {{
-                        color: colors,
-                        size: 6,
-                    }},
-                    text: scatterData.map(d => d.ticker),
-                    customdata: scatterData.map(d => [d.company, d.sector, d.industry, d.mispricingPct, d.predicted]),
-                    hovertemplate:
-                        '<b>%{{text}}</b><br>' +
-                        '%{{customdata[0]}}<br>' +
-                        'Sector: %{{customdata[1]}}<br>' +
-                        'Actual: $%{{x:.2f}}B<br>' +
-                        'Predicted: $%{{customdata[4]:.2f}}B<br>' +
-                        'Mispricing: %{{customdata[3]}}<extra></extra>'
-                }});
-            }}
-
-            // Add zero reference line (fair value)
-            const maxActual = Math.max(...scatterData.map(d => d.actual));
-            const minActual = Math.min(...scatterData.filter(d => d.actual > 0).map(d => d.actual));
-            traces.push({{
-                x: [minActual, maxActual],
-                y: [0, 0],
-                mode: 'lines',
-                type: 'scatter',
-                line: {{ color: 'rgba(255,255,255,0.4)', dash: 'dash', width: 1 }},
-                hoverinfo: 'skip',
-                showlegend: false
-            }});
-
-            Plotly.newPlot('valuationChart', traces, {{
-                ...darkLayout,
-                xaxis: {{ ...darkLayout.xaxis, title: 'Market Cap ($B)', type: 'log' }},
-                yaxis: {{ ...darkLayout.yaxis, title: 'Mispricing %', ticksuffix: '%' }},
-                showlegend: showLegend,
-                legend: {{
-                    orientation: 'v',
-                    x: 1.02,
-                    y: 1,
-                    font: {{ size: 10 }}
-                }}
-            }}, config);
-        }}
-
-        renderValuationChart('mispricing');
-
-        // Toggle buttons
-        document.getElementById('colorByMispricing').addEventListener('click', () => {{
-            document.getElementById('colorByMispricing').classList.add('active');
-            document.getElementById('colorBySector').classList.remove('active');
-            renderValuationChart('mispricing');
-        }});
-
-        document.getElementById('colorBySector').addEventListener('click', () => {{
-            document.getElementById('colorBySector').classList.add('active');
-            document.getElementById('colorByMispricing').classList.remove('active');
-            renderValuationChart('sector');
-        }});
-
-        // Sector Breakdown Chart
-        Plotly.newPlot('sectorChart', [{{
-            x: sectorBreakdown.map(d => d.sector),
-            y: sectorBreakdown.map(d => d.avgMispricing * 100),
-            type: 'bar',
-            marker: {{ color: sectorBreakdown.map(d => d.color) }},
-            text: sectorBreakdown.map(d => (d.avgMispricing * 100).toFixed(1) + '%'),
-            textposition: 'auto',
-            textfont: {{ color: '#f1f5f9' }},
-            hovertemplate:
-                '<b>%{{x}}</b><br>' +
-                'Avg Mispricing: %{{text}}<br>' +
-                'Stocks: %{{customdata[0]}}<br>' +
-                'Total MCap: $%{{customdata[1]:.2f}}T<extra></extra>',
-            customdata: sectorBreakdown.map(d => [d.count, d.totalMcap])
-        }}], {{
-            ...darkLayout,
-            yaxis: {{ ...darkLayout.yaxis, title: 'Avg Mispricing %', tickformat: '.1f', ticksuffix: '%' }},
-            xaxis: {{ ...darkLayout.xaxis, tickangle: -45 }},
-            margin: {{ ...darkLayout.margin, b: 100 }}
-        }}, config);
-
-        // Populate tables
-        function formatMcap(b) {{
-            if (b >= 1000) return '$' + (b/1000).toFixed(1) + 'T';
-            if (b >= 1) return '$' + b.toFixed(1) + 'B';
-            return '$' + (b * 1000).toFixed(0) + 'M';
-        }}
-
-        function renderTable(data, tableId, isPositive) {{
-            const tbody = document.getElementById(tableId);
-            tbody.innerHTML = data.map(d => `
-                <tr class="table-row border-b border-gray-800">
-                    <td class="py-2 font-medium">${{d.ticker}}</td>
-                    <td class="py-2 text-gray-400">${{d.sector}}</td>
-                    <td class="py-2 text-right">${{formatMcap(d.actual)}}</td>
-                    <td class="py-2 text-right">${{formatMcap(d.predicted)}}</td>
-                    <td class="py-2 text-right ${{isPositive ? 'positive' : 'negative'}}">${{d.mispricingPct}}</td>
-                </tr>
-            `).join('');
-        }}
-
-        renderTable(topUndervalued, 'undervaluedTable', true);
-        renderTable(topOvervalued, 'overvaluedTable', false);
-
-        // Sector Legend
-        const legendDiv = document.getElementById('sectorLegend');
-        legendDiv.innerHTML = Object.entries(sectorColors).map(([sector, color]) => `
-            <div class="flex items-center gap-2">
-                <div class="w-3 h-3 rounded" style="background: ${{color}}"></div>
-                <span class="text-sm text-gray-400">${{sector}}</span>
-            </div>
-        `).join('');
-
-        // Signal Quality Charts
-        function getICColor(ic, pval) {{
-            // Green for positive IC, red for negative, opacity based on significance
-            const opacity = pval < 0.05 ? 1 : (pval < 0.10 ? 0.7 : 0.4);
-            if (ic > 0) {{
-                return `rgba(16, 185, 129, ${{opacity}})`;
-            }} else {{
-                return `rgba(239, 68, 68, ${{opacity}})`;
-            }}
-        }}
-
-        function getSignificanceMarker(pval) {{
-            if (pval < 0.05) return '*';
-            if (pval < 0.10) return '~';
-            return '';
-        }}
-
-        // Horizon colors for IC time series
-        const horizonColors = {{
-            10: '#4a90d9',  // Blue
-            30: '#00a86b',  // Green
-            60: '#c9a227',  // Amber
-        }};
-
-        // Build IC time series scatter plot
-        function buildICTimeSeriesChart(data, chartId) {{
-            if (!data || data.length === 0) {{
-                document.getElementById(chartId).innerHTML = '<div style="color:#5a6069;text-align:center;padding:40px;">No backtest data available</div>';
-                return;
-            }}
-
-            // Group by sector/index name
-            const groups = [...new Set(data.map(d => d.name))];
-            const traces = [];
-
-            // For each horizon, create a trace for each group
-            [10, 30, 60].forEach(horizon => {{
-                const horizonData = data.filter(d => d.horizon === horizon);
-                if (horizonData.length === 0) return;
-
-                groups.forEach(groupName => {{
-                    const groupData = horizonData.filter(d => d.name === groupName);
-                    if (groupData.length === 0) return;
-
-                    // Scale point sizes based on -log10(pvalue)
-                    // log_pval typically ranges from 0 (p=1) to ~10+ (very significant)
-                    const sizes = groupData.map(d => {{
-                        const baseSize = 6;
-                        const maxSize = 22;
-                        const scaledSize = baseSize + (d.log_pval / 5) * (maxSize - baseSize);
-                        return Math.min(maxSize, Math.max(baseSize, scaledSize));
-                    }});
-
-                    traces.push({{
-                        x: groupData.map(d => d.quarter),
-                        y: groupData.map(d => d.ic),
-                        mode: 'markers',
-                        type: 'scatter',
-                        name: `${{groupName}} (${{horizon}}d)`,
-                        legendgroup: groupName,
-                        showlegend: horizon === 30,  // Only show legend for 30d horizon
-                        marker: {{
-                            color: horizonColors[horizon],
-                            size: sizes,
-                            opacity: 0.75,
-                            line: {{ color: 'rgba(0,0,0,0.3)', width: 1 }}
-                        }},
-                        text: groupData.map(d => d.name),
-                        customdata: groupData.map(d => [d.pval, d.n_obs, d.spread, d.hit_rate, d.horizon]),
-                        hovertemplate:
-                            '<b>%{{text}}</b> (%{{customdata[4]}}d)<br>' +
-                            'Quarter: %{{x}}<br>' +
-                            'IC: %{{y:.3f}}<br>' +
-                            'p-value: %{{customdata[0]:.4f}}<br>' +
-                            'N: %{{customdata[1]:,}}<extra></extra>'
-                    }});
-                }});
-            }});
-
-            // Add zero reference line
-            traces.push({{
-                x: [...new Set(data.map(d => d.quarter))].sort(),
-                y: Array([...new Set(data.map(d => d.quarter))].length).fill(0),
-                mode: 'lines',
-                type: 'scatter',
-                line: {{ color: '#3a3e48', dash: 'dash', width: 1 }},
-                hoverinfo: 'skip',
-                showlegend: false
-            }});
-
-            Plotly.newPlot(chartId, traces, {{
-                ...darkLayout,
-                yaxis: {{ 
-                    ...darkLayout.yaxis, 
-                    title: 'Information Coefficient',
-                    zeroline: true, 
-                    zerolinecolor: '#3a3e48',
-                    range: [-0.3, 0.3]
-                }},
-                xaxis: {{ 
-                    ...darkLayout.xaxis, 
-                    title: 'Quarter',
-                    tickangle: -45
-                }},
-                showlegend: true,
-                legend: {{ 
-                    orientation: 'v', 
-                    x: 1.02, 
-                    y: 1,
-                    font: {{ size: 9 }},
-                    bgcolor: 'rgba(0,0,0,0)'
-                }},
-                margin: {{ ...darkLayout.margin, r: 120, b: 80 }}
-            }}, config);
-        }}
-
-        // Render IC time series charts
-        buildICTimeSeriesChart(backtestSectorTS, 'icSectorChart');
-        buildICTimeSeriesChart(backtestIndexTS, 'icIndexChart');
-
-        // IC Decay by Horizon Chart
-        if (backtestHorizon.length > 0) {{
-            Plotly.newPlot('icHorizonChart', [
-                {{
-                    x: backtestHorizon.map(d => d.horizon + 'd'),
-                    y: backtestHorizon.map(d => d.avg_ic),
-                    type: 'bar',
-                    name: 'Avg IC',
-                    marker: {{ color: '#3b82f6' }},
-                    text: backtestHorizon.map(d => (d.avg_ic * 100).toFixed(2) + '%'),
-                    textposition: 'auto',
-                    textfont: {{ color: '#f1f5f9' }},
-                }},
-                {{
-                    x: backtestHorizon.map(d => d.horizon + 'd'),
-                    y: backtestHorizon.map(d => d.avg_spread),
-                    type: 'scatter',
-                    mode: 'lines+markers',
-                    name: 'Avg Spread',
-                    yaxis: 'y2',
-                    line: {{ color: '#f59e0b', width: 2 }},
-                    marker: {{ size: 8 }},
-                }}
-            ], {{
-                ...darkLayout,
-                yaxis: {{ ...darkLayout.yaxis, title: 'Average IC', side: 'left' }},
-                yaxis2: {{ title: 'Quantile Spread', overlaying: 'y', side: 'right', gridcolor: 'rgba(0,0,0,0)', tickformat: '.1%', color: '#f59e0b' }},
-                xaxis: {{ ...darkLayout.xaxis, title: 'Horizon' }},
-                legend: {{ orientation: 'h', y: 1.1, x: 0.5, xanchor: 'center' }},
-                showlegend: true,
-            }}, config);
-        }}
-
-        // Signal Quality Table
-        function renderSignalQualityTable() {{
-            const allData = [
-                ...backtestSectorSummary.map(d => ({{...d, type: 'Sector'}})), 
-                ...backtestIndexSummary.map(d => ({{...d, type: 'Index'}}))
-            ];
-            // Sort by absolute IC
-            allData.sort((a, b) => Math.abs(b.ic) - Math.abs(a.ic));
-
-            const tbody = document.getElementById('signalQualityTable');
-            tbody.innerHTML = allData.slice(0, 15).map(d => {{
-                const sig = d.pval < 0.05 ? '*' : (d.pval < 0.10 ? '~' : '');
-                const icClass = d.ic > 0 ? 'positive' : 'negative';
-                return `
-                    <tr class="table-row border-b border-gray-800">
-                        <td class="py-2">
-                            <span class="text-xs text-gray-500">${{d.type}}</span>
-                            <span class="font-medium ml-1">${{d.name}}</span>
-                        </td>
-                        <td class="py-2 text-right text-gray-400">${{d.n_obs.toLocaleString()}}</td>
-                        <td class="py-2 text-right ${{icClass}}">${{(d.ic >= 0 ? '+' : '') + (d.ic * 100).toFixed(2)}}%${{sig}}</td>
-                        <td class="py-2 text-right">${{(d.spread * 100).toFixed(1)}}%</td>
-                        <td class="py-2 text-right">${{(d.hit_rate * 100).toFixed(0)}}%</td>
-                    </tr>
-                `;
-            }}).join('');
-        }}
-        renderSignalQualityTable();
-    </script>
-</body>
-</html>'''
-
-    return html
+    # Save to web/public/dashboard_data.json
+    output_dir = "web/public"
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, "dashboard_data.json")
+    
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    
+    print(f"Dashboard data saved to {output_path}")
 
 
 def main() -> None:
-    """Generate the financial dashboard."""
-    print("Generating Financial Dashboard...")
+    """Generate the financial dashboard data."""
+    print("Generating Financial Dashboard Data...")
 
     # Load data
     print("  Loading valuation data with sectors...")
     valuation_df = get_valuation_data_with_sectors()
     print(f"  Loaded {len(valuation_df)} valuations")
-
 
     print("  Loading index analysis data...")
     index_data = get_index_analysis_data()
@@ -1172,27 +601,27 @@ def main() -> None:
         print("Error: No valuation data found. Run the valuation pipeline first.")
         return
 
+    # Size correction is now applied at valuation time and stored in DB (residual_error)
+    size_correction = None
+
+    # Load per-quarter size coefficients for time-series chart
+    print("  Computing per-quarter size coefficients...")
+    size_coefficients = get_per_quarter_size_coefficients()
+    print(f"    Loaded {len(size_coefficients)} quarters with coefficients")
+
     # Compute stats
-    stats = compute_summary_stats(valuation_df, index_data)
+    stats = compute_summary_stats(valuation_df, index_data, size_correction)
 
-    # Generate HTML
-    html = generate_dashboard_html(valuation_df, index_data, stats, backtest_data, index_timeseries)
-
-    # Ensure output directory exists
-    os.makedirs("plots", exist_ok=True)
-    output_file = "plots/dashboard.html"
-
-    with open(output_file, "w", encoding="utf-8") as f:
-        f.write(html)
-
-    print(f"Dashboard saved to {output_file}")
-
-    # Open in browser
-    try:
-        os.startfile(output_file)
-    except Exception:
-        print(f"  Open {output_file} in your browser to view.")
-
+    # Generate JSON
+    build_and_save_dashboard_data(
+        valuation_df, 
+        index_data, 
+        stats, 
+        backtest_data, 
+        index_timeseries, 
+        size_correction, 
+        size_coefficients
+    )
 
 if __name__ == "__main__":
     main()

@@ -38,6 +38,7 @@ from src.db.config import DATABASE_URL
 from src.db.models import FinancialSnapshot, ValuationResult
 from src.valuation.feature_builder import build_feature_matrix
 from src.valuation.config import gbr_baseline_model
+from src.valuation.size_correction import estimate_size_coefficient, compute_residual_mispricing
 from src.evaluation import SimpleRepeatedCV, DEFAULT_MODEL_PARAMS
 
 # Configuration
@@ -209,6 +210,11 @@ def run_valuation_for_quarter(
     relative_error = (pred_mcap - actual_mcap) / actual_mcap
     relative_std = pred_mcap_std / actual_mcap
 
+    # 6. Compute size-corrected (residual) mispricing
+    logger.info("  Computing size premium correction...")
+    residual_error, _ = compute_residual_mispricing(relative_error, actual_mcap)
+    logger.info(f"  Residual error: mean={np.mean(residual_error):.3f}, median={np.median(residual_error):.3f}")
+
     logger.info("  Saving valuations to database...")
     valuations = []
 
@@ -223,6 +229,7 @@ def run_valuation_for_quarter(
             predicted_mcap_std=float(pred_mcap_std[i]),
             actual_mcap=float(actual_mcap[i]),
             relative_error=float(relative_error[i]),
+            residual_error=float(residual_error[i]),
             relative_std=float(relative_std[i]),
             n_experiments=N_CV_REPEATS,
         )

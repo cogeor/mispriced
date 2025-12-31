@@ -24,6 +24,9 @@ class IndexAnalysis(BaseModel):
     total_predicted: float = Field(description="Total predicted market cap in USD")
     count: int = Field(description="Number of tickers with valuations")
     official_count: int = Field(description="Official number of constituents")
+    residual_mispricing: Optional[float] = Field(
+        default=None, description="Size-corrected relative mispricing"
+    )
 
 
 class IndexResult(BaseModel):

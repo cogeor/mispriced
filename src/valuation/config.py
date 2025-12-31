@@ -42,13 +42,27 @@ def full_feature_model() -> ModelConfig:
     )
 
 def gbr_baseline_model() -> ModelConfig:
-    """Create baseline Gradient Boosting Regressor model."""
+    """Create baseline Gradient Boosting Regressor model.
+
+    Uses core financial features with good data coverage (>60%).
+    Missing values are handled gracefully via fill strategies.
+    """
     return (
-        ModelBuilder("GBR_Baseline", "1")
-        .description("Gradient Boosting Regressor baseline")
+        ModelBuilder("GBR_Baseline", "3")
+        .description("Gradient Boosting Regressor with core fundamentals")
         .model_type("gbr")
-        .add_core_fundamentals()
-        .add_ratio_features()
+        # Core features with good coverage
+        .add_feature("total_revenue", required=True, transform="log")
+        .add_feature("net_income", required=False, transform="log", fill_strategy="zero")
+        .add_feature("ebitda", required=False, transform="log", fill_strategy="zero")
+        .add_feature("total_debt", required=False, transform="log", fill_strategy="zero")
+        .add_feature("total_cash", required=False, transform="log", fill_strategy="zero")
+        .add_feature("book_value", required=False, fill_strategy="median")
+        .add_feature("free_cash_flow", required=False, fill_strategy="zero")
+        # Ratio features
+        .add_feature("profit_margins", required=False, fill_strategy="median")
+        .add_feature("roe", required=False, fill_strategy="median")
+        .add_feature("roa", required=False, fill_strategy="median")
         .param_grid(
             n_estimators=[100, 200],
             max_depth=[3, 5],

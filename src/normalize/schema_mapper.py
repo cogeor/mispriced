@@ -33,11 +33,13 @@ class SchemaMapper:
             "shares_outstanding": ["sharesOutstanding", "impliedSharesOutstanding"],
             "float_shares": ["floatShares"],
             "total_debt": ["totalDebt", "Total Debt"],
-            "total_cash": ["totalCash", "Total Cash"],
+            "total_cash": ["totalCash", "Total Cash", "Cash And Cash Equivalents", "Cash Cash Equivalents And Short Term Investments"],
             "total_assets": ["totalAssets", "Total Assets"],
             "free_cash_flow": ["freeCashflow", "Free Cash Flow"],
             "operating_cash_flow": ["operatingCashflow", "Operating Cash Flow"],
-            "capex": ["capitalExpenditures", "Capital Expenditures"],
+            "capex": ["capitalExpenditures", "Capital Expenditures", "Capital Expenditure"],
+            "working_capital": ["Working Capital"],
+            "book_value": ["bookValue", "Stockholders Equity", "Tangible Book Value"],
             # Ratios
             "profit_margins": ["profitMargins"],
             "gross_margin": ["grossMargins"],
@@ -50,6 +52,7 @@ class SchemaMapper:
             "quick_ratio": ["quickRatio"],
             "dividend_yield": ["dividendYield"],
             "dividend_rate": ["dividendRate"],
+            "five_year_avg_div_yield": ["fiveYearAvgDividendYield"],
             "beta": ["beta"],
             
             # Risk
@@ -59,6 +62,7 @@ class SchemaMapper:
             
             # Short
             "shares_short": ["sharesShort"],
+            "shares_short_prior_month": ["sharesShortPriorMonth", "sharesShortPreviousMonthDate"],
             "short_ratio": ["shortRatio"],
             "held_percent_insiders": ["heldPercentInsiders"],
             "held_percent_institutions": ["heldPercentInstitutions"],
