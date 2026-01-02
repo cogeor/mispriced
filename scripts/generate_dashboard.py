@@ -12,12 +12,39 @@ from typing import List, Dict, Any, Optional
 
 import numpy as np
 
+# Approximate FX rates to USD (for currencies not stored in USD)
+# These are used to convert actual_mcap to USD for comparison with USD predictions
+FX_TO_USD = {
+    "USD": 1.0,
+    "GBP": 1.27,      # 1 GBP = 1.27 USD
+    "GBp": 0.0127,    # 1 pence = 0.0127 USD (GBP/100)
+    "GBX": 0.0127,    # Alternative code for pence
+    "EUR": 1.08,      # 1 EUR = 1.08 USD
+    "INR": 0.012,     # 1 INR = 0.012 USD (1/84)
+    "HKD": 0.128,     # 1 HKD = 0.128 USD (1/7.8)
+    "JPY": 0.0067,    # 1 JPY = 0.0067 USD (1/150)
+    "CNY": 0.14,      # 1 CNY = 0.14 USD (1/7.2)
+    "CHF": 1.13,      # 1 CHF = 1.13 USD
+    "CAD": 0.74,      # 1 CAD = 0.74 USD
+    "AUD": 0.65,      # 1 AUD = 0.65 USD
+    "KRW": 0.00072,   # 1 KRW = 0.00072 USD (1/1400)
+    "TWD": 0.031,     # 1 TWD = 0.031 USD (1/32)
+    "SGD": 0.74,      # 1 SGD = 0.74 USD
+    "SEK": 0.095,     # 1 SEK = 0.095 USD
+    "NOK": 0.091,     # 1 NOK = 0.091 USD
+    "DKK": 0.145,     # 1 DKK = 0.145 USD
+    "ILS": 0.27,      # 1 ILS = 0.27 USD
+    "BRL": 0.17,      # 1 BRL = 0.17 USD
+    "MXN": 0.058,     # 1 MXN = 0.058 USD
+    "ZAR": 0.054,     # 1 ZAR = 0.054 USD
+}
+
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pandas as pd
 from src.db.session import SessionLocal
-from src.db.models import Ticker, ValuationResult
+from src.db.models import Ticker, ValuationResult, FinancialSnapshot
 from src.index import IndexService, IndexAnalysis
 from src.config.metrics import (
     ACTIVE_MISPRICING_METRIC,
@@ -34,6 +61,23 @@ from src.valuation.size_correction import (
 
 # Backtest data path
 BACKTEST_SUMMARY_PATH = "data/signal_backtest_summary.csv"
+
+
+def get_available_quarters() -> List[datetime]:
+    """Get all quarters with significant valuation data (>1000 tickers)."""
+    from sqlalchemy import func
+    session = SessionLocal()
+    try:
+        quarters = (
+            session.query(ValuationResult.snapshot_timestamp)
+            .group_by(ValuationResult.snapshot_timestamp)
+            .having(func.count(func.distinct(ValuationResult.ticker)) > 1000)
+            .order_by(ValuationResult.snapshot_timestamp.desc())
+            .all()
+        )
+        return [q[0] for q in quarters]
+    finally:
+        session.close()
 
 
 # Professional color palette for sectors (Bloomberg-inspired)
@@ -95,6 +139,8 @@ def get_valuation_data_with_sectors(quarter_date: datetime = None) -> pd.DataFra
             print(f"  Using model version: {model_version}")
 
         # Query valuations for this specific quarter and model
+        # Also join with FinancialSnapshot to get price_t0 and shares_outstanding
+        # for calculating historical market cap
         query = session.query(
             ValuationResult.ticker,
             ValuationResult.actual_mcap,
@@ -107,8 +153,15 @@ def get_valuation_data_with_sectors(quarter_date: datetime = None) -> pd.DataFra
             Ticker.sector,
             Ticker.company_name,
             Ticker.industry,
+            FinancialSnapshot.price_t0,
+            FinancialSnapshot.shares_outstanding,
+            FinancialSnapshot.stored_currency,
         ).join(
             Ticker, Ticker.ticker == ValuationResult.ticker
+        ).join(
+            FinancialSnapshot,
+            (FinancialSnapshot.ticker == ValuationResult.ticker) &
+            (FinancialSnapshot.snapshot_timestamp == ValuationResult.snapshot_timestamp)
         ).filter(
             ValuationResult.snapshot_timestamp == quarter_date
         )
@@ -120,6 +173,33 @@ def get_valuation_data_with_sectors(quarter_date: datetime = None) -> pd.DataFra
 
         # Deduplicate by ticker (shouldn't be needed but safety check)
         df = df.drop_duplicates(subset=["ticker"])
+
+        df["predicted_mcap_mean"] = pd.to_numeric(df["predicted_mcap_mean"], errors="coerce")
+        df["relative_error"] = pd.to_numeric(df["relative_error"], errors="coerce")
+        df["actual_mcap"] = pd.to_numeric(df["actual_mcap"], errors="coerce")
+
+        # Back-calculate actual_mcap from predicted and relative_error
+        # This ensures consistency: actual = predicted / (1 + relative_error)
+        # The relative_error in DB was computed correctly during valuation
+        valid_mask = (
+            df["predicted_mcap_mean"].notna() &
+            df["relative_error"].notna() &
+            (df["relative_error"] > -0.99)  # Avoid division by near-zero
+        )
+        df.loc[valid_mask, "actual_mcap"] = (
+            df.loc[valid_mask, "predicted_mcap_mean"] /
+            (1 + df.loc[valid_mask, "relative_error"])
+        )
+
+        # Recalculate residual_error (size-neutral mispricing)
+        from src.valuation.size_correction import compute_residual_mispricing
+        compute_mask = df["actual_mcap"].notna() & (df["actual_mcap"] > 0)
+        if compute_mask.sum() > 10:  # Need enough data for regression
+            residual_err, _ = compute_residual_mispricing(
+                df.loc[compute_mask, "relative_error"].values,
+                df.loc[compute_mask, "actual_mcap"].values
+            )
+            df.loc[compute_mask, "residual_error"] = residual_err
 
         # Clean sector data
         df["sector"] = df["sector"].fillna("Unknown")
@@ -236,6 +316,95 @@ def get_index_mispricing_timeseries() -> List[Dict[str, Any]]:
         session.close()
 
 
+def get_sector_mispricing_timeseries() -> List[Dict[str, Any]]:
+    """Get sector mispricing over time, using per-quarter data grouped by sector."""
+    session = SessionLocal()
+    try:
+        from sqlalchemy import func
+
+        # Get all quarter dates with significant valuations (>1000 unique tickers)
+        quarter_dates = session.query(
+            ValuationResult.snapshot_timestamp
+        ).group_by(
+            ValuationResult.snapshot_timestamp
+        ).having(
+            func.count(func.distinct(ValuationResult.ticker)) > 1000
+        ).order_by(
+            ValuationResult.snapshot_timestamp
+        ).all()
+
+        results = []
+        for (quarter_date,) in quarter_dates:
+            # Find dominant model version for this quarter
+            most_common_version = (
+                session.query(ValuationResult.model_version)
+                .filter(ValuationResult.snapshot_timestamp == quarter_date)
+                .group_by(ValuationResult.model_version)
+                .order_by(func.count(ValuationResult.ticker).desc())
+                .first()
+            )
+            model_version = most_common_version[0] if most_common_version else None
+
+            # Get valuations with sector info for this quarter
+            query = session.query(
+                ValuationResult.ticker,
+                ValuationResult.actual_mcap,
+                ValuationResult.predicted_mcap_mean,
+                ValuationResult.relative_error,
+                ValuationResult.residual_error,
+                Ticker.sector,
+            ).join(
+                Ticker, Ticker.ticker == ValuationResult.ticker,
+            ).filter(
+                ValuationResult.snapshot_timestamp == quarter_date,
+            )
+
+            if model_version:
+                query = query.filter(ValuationResult.model_version == model_version)
+
+            df = pd.read_sql(query.statement, session.bind)
+
+            if df.empty:
+                continue
+
+            # Clean sector data
+            df["sector"] = df["sector"].fillna("Unknown")
+            df["sector"] = df["sector"].replace("", "Unknown")
+
+            # Deduplicate by ticker
+            df = df.drop_duplicates(subset=['ticker'])
+
+            # Handle null residual_error
+            df['residual_error'] = df['residual_error'].fillna(df['relative_error'])
+
+            # Group by sector and compute aggregates
+            for sector in df['sector'].unique():
+                sector_df = df[df['sector'] == sector]
+
+                total_actual = float(sector_df['actual_mcap'].sum())
+                total_predicted = float(sector_df['predicted_mcap_mean'].sum())
+                count = len(sector_df)
+
+                if total_actual > 0 and count >= 5:  # At least 5 stocks for meaningful data
+                    mispricing = (total_predicted - total_actual) / total_actual
+
+                    # Compute residual mispricing (cap-weighted average)
+                    weights = sector_df['actual_mcap'] / total_actual
+                    residual_mispricing = float((weights * sector_df['residual_error']).sum())
+
+                    results.append({
+                        "sector": sector,
+                        "date": quarter_date.strftime("%Y-%m-%d"),
+                        "mispricing": mispricing,
+                        "residualMispricing": residual_mispricing,
+                        "count": count,
+                    })
+
+        return results
+    finally:
+        session.close()
+
+
 def get_per_quarter_size_coefficients() -> List[Dict[str, Any]]:
     """
     Compute size premium coefficients for each quarter.
@@ -297,7 +466,7 @@ def get_backtest_data() -> Dict[str, Any]:
     df = pd.read_csv(detailed_path)
 
     # Build time-series data for scatter plots (individual    # Build time-series data points for scatter plot
-    def build_timeseries(group_df: pd.DataFrame, min_samples_per_point: int = 30) -> List[Dict]:
+    def build_timeseries(group_df: pd.DataFrame, min_samples_per_point: int = 10) -> List[Dict]:
         """Build time-series data points for scatter plot."""
         results = []
         for _, row in group_df.iterrows():
@@ -465,41 +634,26 @@ def compute_summary_stats(
     }
 
 
-def build_and_save_dashboard_data(
-    valuation_df: pd.DataFrame,
-    index_data: List[IndexAnalysis],
-    stats: Dict[str, Any],
-    backtest_data: Dict[str, Any],
-    index_timeseries: List[Dict[str, Any]] = None,
-    size_correction: Optional[SizeCorrectionResult] = None,
-    size_coefficients: List[Dict[str, Any]] = None,
-) -> None:
-    """Build dashboard data dictionary and save to JSON."""
+def build_scatter_data(valuation_df: pd.DataFrame, min_mcap_b: float = 0.1) -> List[Dict[str, Any]]:
+    """Build scatter data from a valuation dataframe.
 
-    # Prepare size premium curve data
-    size_premium_curve = []
-    if size_correction:
-        est = size_correction.size_premium_estimate
-        # Sample points along the curve for plotting
-        if hasattr(est, 'log_mcap_grid'):
-             for i in range(0, len(est.log_mcap_grid), max(1, len(est.log_mcap_grid) // 50)):
-                size_premium_curve.append({
-                    "logMcap": float(est.log_mcap_grid[i]),
-                    "mcapB": float(np.exp(est.log_mcap_grid[i])) / 1e9,
-                    "expectedMispricing": float(est.expected_mispricing[i]),
-                })
-
-    # Prepare valuation scatter data
+    Args:
+        valuation_df: DataFrame with valuation results
+        min_mcap_b: Minimum market cap in billions to include (default 0.1 = $100M)
+    """
     scatter_data = []
-    for idx, (_, row) in enumerate(valuation_df.iterrows()):
+    for _, row in valuation_df.iterrows():
         actual_b = float(row["actual_mcap"]) / 1e9
+
+        # Skip micro-cap stocks - model predictions unreliable
+        if actual_b < min_mcap_b:
+            continue
         predicted_b = float(row["predicted_mcap_mean"]) / 1e9
         mispricing = float(row["relative_error"])
-        # Get residual (size-neutral) mispricing from DB
         residual_mispricing = float(row["residual_error"]) if pd.notna(row["residual_error"]) else mispricing
         rel_std = float(row["relative_std"]) if pd.notna(row["relative_std"]) else 0.0
         sector = row["sector"] if row["sector"] else "Unknown"
-        
+
         scatter_data.append({
             "ticker": row["ticker"],
             "actual": actual_b,
@@ -514,6 +668,61 @@ def build_and_save_dashboard_data(
             "industry": row["industry"] or "N/A",
             "sectorColor": SECTOR_COLORS.get(sector, SECTOR_COLORS["Unknown"]),
         })
+    return scatter_data
+
+
+def build_sector_breakdown(valuation_df: pd.DataFrame) -> List[Dict[str, Any]]:
+    """Build sector breakdown from a valuation dataframe."""
+    sector_stats = valuation_df.groupby("sector").agg({
+        "ticker": "count",
+        "relative_error": "mean",
+        "actual_mcap": "sum"
+    }).reset_index()
+    sector_stats.columns = ["sector", "count", "avg_mispricing", "total_mcap"]
+    sector_breakdown = []
+    for _, row in sector_stats.iterrows():
+        sector_breakdown.append({
+            "sector": row["sector"],
+            "count": int(row["count"]),
+            "avgMispricing": float(row["avg_mispricing"]),
+            "totalMcap": float(row["total_mcap"]) / 1e12,
+            "color": SECTOR_COLORS.get(row["sector"], SECTOR_COLORS["Unknown"]),
+        })
+    return sorted(sector_breakdown, key=lambda x: x["totalMcap"], reverse=True)
+
+
+def build_and_save_dashboard_data(
+    valuation_df: pd.DataFrame,
+    index_data: List[IndexAnalysis],
+    stats: Dict[str, Any],
+    backtest_data: Dict[str, Any],
+    index_timeseries: List[Dict[str, Any]] = None,
+    sector_timeseries: List[Dict[str, Any]] = None,
+    size_correction: Optional[SizeCorrectionResult] = None,
+    size_coefficients: List[Dict[str, Any]] = None,
+    available_quarters: List[str] = None,
+) -> None:
+    """Build dashboard data dictionary and save to JSON.
+
+    Only saves the latest quarter's data in the main file.
+    Historical quarters are saved separately for lazy loading.
+    """
+
+    # Prepare size premium curve data
+    size_premium_curve = []
+    if size_correction:
+        est = size_correction.size_premium_estimate
+        # Sample points along the curve for plotting
+        if hasattr(est, 'log_mcap_grid'):
+             for i in range(0, len(est.log_mcap_grid), max(1, len(est.log_mcap_grid) // 50)):
+                size_premium_curve.append({
+                    "logMcap": float(est.log_mcap_grid[i]),
+                    "mcapB": float(np.exp(est.log_mcap_grid[i])) / 1e9,
+                    "expectedMispricing": float(est.expected_mispricing[i]),
+                })
+
+    # Prepare valuation scatter data (for latest quarter only)
+    scatter_data = build_scatter_data(valuation_df)
 
     # Prepare index bar chart data
     index_chart_data = []
@@ -533,26 +742,10 @@ def build_and_save_dashboard_data(
             "officialCount": analysis.official_count,
         })
 
-    # Sector breakdown
-    sector_stats = valuation_df.groupby("sector").agg({
-        "ticker": "count",
-        "relative_error": "mean",
-        "actual_mcap": "sum"
-    }).reset_index()
-    sector_stats.columns = ["sector", "count", "avg_mispricing", "total_mcap"]
-    sector_breakdown = []
-    for _, row in sector_stats.iterrows():
-        sector_breakdown.append({
-            "sector": row["sector"],
-            "count": int(row["count"]),
-            "avgMispricing": float(row["avg_mispricing"]),
-            "totalMcap": float(row["total_mcap"]) / 1e12,
-            "color": SECTOR_COLORS.get(row["sector"], SECTOR_COLORS["Unknown"]),
-        })
-    sector_breakdown = sorted(sector_breakdown, key=lambda x: x["totalMcap"], reverse=True)
+    # Sector breakdown (for latest quarter)
+    sector_breakdown = build_sector_breakdown(valuation_df)
 
-
-    # Construct final payload
+    # Construct final payload - NO valuation_by_quarter (loaded lazily)
     payload = {
         "generated_at": datetime.now().isoformat(),
         "stats": stats,
@@ -561,19 +754,39 @@ def build_and_save_dashboard_data(
         "sector_breakdown": sector_breakdown,
         "backtest_data": backtest_data,
         "index_timeseries": index_timeseries,
+        "sector_timeseries": sector_timeseries,
         "size_premium_curve": size_premium_curve,
         "size_coefficients": size_coefficients,
+        "available_quarters": available_quarters or [],
     }
 
     # Save to web/public/dashboard_data.json
     output_dir = "web/public"
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, "dashboard_data.json")
-    
+
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
-    
+
     print(f"Dashboard data saved to {output_path}")
+
+
+def save_quarter_data(quarter_str: str, quarter_df: pd.DataFrame) -> None:
+    """Save a single quarter's data to a separate JSON file for lazy loading."""
+    output_dir = "web/public/quarters"
+    os.makedirs(output_dir, exist_ok=True)
+
+    quarter_data = {
+        "quarter": quarter_str,
+        "scatter_data": build_scatter_data(quarter_df),
+        "sector_breakdown": build_sector_breakdown(quarter_df),
+    }
+
+    output_path = os.path.join(output_dir, f"{quarter_str}.json")
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(quarter_data, f, indent=2)
+
+    return output_path
 
 
 def main() -> None:
@@ -592,6 +805,10 @@ def main() -> None:
     print("  Loading index mispricing time series...")
     index_timeseries = get_index_mispricing_timeseries()
     print(f"  Loaded {len(index_timeseries)} index-quarter data points")
+
+    print("  Loading sector mispricing time series...")
+    sector_timeseries = get_sector_mispricing_timeseries()
+    print(f"  Loaded {len(sector_timeseries)} sector-quarter data points")
 
     print("  Loading backtest data...")
     backtest_data = get_backtest_data()
@@ -612,15 +829,29 @@ def main() -> None:
     # Compute stats
     stats = compute_summary_stats(valuation_df, index_data, size_correction)
 
-    # Generate JSON
+    # Generate per-quarter valuation data as separate files for lazy loading
+    print("  Generating per-quarter valuation data (lazy loading)...")
+    available_quarters = get_available_quarters()
+    quarter_strings = []
+    for q in available_quarters:
+        q_str = q.strftime("%Y-%m-%d") if hasattr(q, 'strftime') else str(q)[:10]
+        q_df = get_valuation_data_with_sectors(q)
+        if not q_df.empty:
+            save_quarter_data(q_str, q_df)
+            quarter_strings.append(q_str)
+    print(f"    Saved {len(quarter_strings)} quarter files to web/public/quarters/")
+
+    # Generate main JSON (latest quarter data only)
     build_and_save_dashboard_data(
-        valuation_df, 
-        index_data, 
-        stats, 
-        backtest_data, 
-        index_timeseries, 
-        size_correction, 
-        size_coefficients
+        valuation_df,
+        index_data,
+        stats,
+        backtest_data,
+        index_timeseries,
+        sector_timeseries,
+        size_correction,
+        size_coefficients,
+        quarter_strings,
     )
 
 if __name__ == "__main__":

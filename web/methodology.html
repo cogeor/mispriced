@@ -1,0 +1,622 @@
+<!doctype html>
+<html lang="en" class="dark">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Methodology - Mispriced</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        gray: {
+                            850: '#1f2937',
+                            900: '#111827',
+                            950: '#0b0f19',
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            background-color: #0b0f19;
+            color: #e5e7eb;
+            font-family: 'Inter', sans-serif;
+        }
+
+        .card {
+            background: rgba(17, 24, 39, 0.7);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(55, 65, 81, 0.5);
+            border-radius: 0.75rem;
+        }
+
+        .formula {
+            font-family: ui-monospace, monospace;
+            background: rgba(31, 41, 55, 0.6);
+            padding: 0.75rem 1rem;
+            border-radius: 0.5rem;
+            border: 1px solid rgba(55, 65, 81, 0.5);
+        }
+
+        .feature-table th {
+            background: rgba(31, 41, 55, 0.6);
+        }
+
+        .feature-table td, .feature-table th {
+            border: 1px solid rgba(55, 65, 81, 0.4);
+            padding: 0.5rem 0.75rem;
+        }
+
+        .step-number {
+            width: 28px;
+            height: 28px;
+            background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 0.875rem;
+            flex-shrink: 0;
+        }
+
+        .cv-diagram {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 4px;
+        }
+
+        .cv-fold {
+            height: 24px;
+            border-radius: 4px;
+            font-size: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .cv-train { background: rgba(59, 130, 246, 0.4); }
+        .cv-test { background: rgba(239, 68, 68, 0.6); }
+
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #111827; }
+        ::-webkit-scrollbar-thumb { background: #374151; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #4b5563; }
+    </style>
+</head>
+
+<body class="min-h-screen p-4 md:px-12 md:pt-6 md:pb-12 selection:bg-blue-500 selection:text-white">
+
+    <div class="max-w-[900px] mx-auto">
+
+        <!-- Back Link -->
+        <a href="index.html" class="inline-flex items-center gap-2 text-blue-400 hover:text-blue-300 text-sm mb-6 transition-colors">
+            <span>&larr;</span>
+            <span>Back to Dashboard</span>
+        </a>
+
+        <!-- Header -->
+        <header class="mb-8">
+            <h1 class="font-extrabold tracking-tight text-white text-3xl mb-2">Model Methodology</h1>
+            <p class="text-gray-400">Technical documentation for the Mispriced valuation model</p>
+        </header>
+
+        <!-- Table of Contents -->
+        <nav class="card p-4 mb-8">
+            <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">Contents</h2>
+            <ol class="space-y-1 text-sm">
+                <li><a href="#overview" class="text-blue-400 hover:text-blue-300">1. Overview</a></li>
+                <li><a href="#architecture" class="text-blue-400 hover:text-blue-300">2. Model Architecture</a></li>
+                <li><a href="#cross-validation" class="text-blue-400 hover:text-blue-300">3. Cross-Validation Methodology</a></li>
+                <li><a href="#features" class="text-blue-400 hover:text-blue-300">4. Feature Engineering</a></li>
+                <li><a href="#mispricing" class="text-blue-400 hover:text-blue-300">5. Mispricing Calculation</a></li>
+                <li><a href="#backtesting" class="text-blue-400 hover:text-blue-300">6. Signal Quality & Backtesting</a></li>
+                <li><a href="#limitations" class="text-blue-400 hover:text-blue-300">7. Limitations & Caveats</a></li>
+            </ol>
+        </nav>
+
+        <!-- Section 1: Overview -->
+        <section id="overview" class="card p-6 mb-6">
+            <h2 class="text-xl font-bold text-white mb-4">1. Overview</h2>
+
+            <div class="space-y-4 text-gray-300">
+                <div class="bg-blue-900/20 border border-blue-700/30 rounded-lg p-4">
+                    <h3 class="font-semibold text-blue-300 mb-2">What the Model Does</h3>
+                    <p class="text-sm">
+                        The model predicts <strong>fair market capitalization</strong> from financial statement data
+                        using machine learning. It learns historical relationships between company fundamentals
+                        (revenue, profits, debt, cash flows) and market valuations across thousands of stocks.
+                    </p>
+                </div>
+
+                <div class="bg-amber-900/20 border border-amber-700/30 rounded-lg p-4">
+                    <h3 class="font-semibold text-amber-300 mb-2">What the Model Does NOT Do</h3>
+                    <ul class="text-sm space-y-1 list-disc list-inside">
+                        <li>It does not predict future stock prices or returns</li>
+                        <li>It does not account for growth expectations or momentum</li>
+                        <li>It does not provide buy/sell recommendations</li>
+                        <li>It is not a fundamental DCF or comparable company analysis</li>
+                    </ul>
+                </div>
+
+                <div class="bg-gray-800/50 rounded-lg p-4">
+                    <h3 class="font-semibold text-gray-200 mb-2">Key Insight</h3>
+                    <p class="text-sm">
+                        Mispricing signals are <strong>relative</strong>, not absolute. A stock showing -20% mispricing
+                        means the model predicts a lower fair value than the current market cap based on fundamentals alone.
+                        This could indicate overvaluation, but could also reflect growth expectations, brand value, or other
+                        intangibles not captured by financial statements.
+                    </p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Section 2: Model Architecture -->
+        <section id="architecture" class="card p-6 mb-6">
+            <h2 class="text-xl font-bold text-white mb-4">2. Model Architecture</h2>
+
+            <div class="space-y-4 text-gray-300">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="bg-gray-800/50 rounded-lg p-4">
+                        <h3 class="font-semibold text-gray-200 mb-2">Algorithm</h3>
+                        <p class="text-2xl font-bold text-blue-400 mb-1">XGBoost</p>
+                        <p class="text-sm text-gray-400">Gradient Boosted Decision Trees</p>
+                    </div>
+                    <div class="bg-gray-800/50 rounded-lg p-4">
+                        <h3 class="font-semibold text-gray-200 mb-2">Target Variable</h3>
+                        <p class="text-2xl font-bold text-green-400 mb-1">log(market_cap)</p>
+                        <p class="text-sm text-gray-400">Log-transformed for numerical stability</p>
+                    </div>
+                </div>
+
+                <h3 class="font-semibold text-gray-200 mt-4">Why Tree-Based Models?</h3>
+                <ul class="text-sm space-y-2 list-disc list-inside text-gray-400">
+                    <li><strong class="text-gray-300">Non-linear relationships:</strong> Financial ratios have complex, non-linear effects on valuation</li>
+                    <li><strong class="text-gray-300">Feature interactions:</strong> Trees naturally capture interactions (e.g., high debt is worse for low-margin companies)</li>
+                    <li><strong class="text-gray-300">Robustness:</strong> Less sensitive to outliers and missing data than linear models</li>
+                    <li><strong class="text-gray-300">No scaling required:</strong> Tree splits are invariant to monotonic feature transformations</li>
+                </ul>
+
+                <h3 class="font-semibold text-gray-200 mt-4">Hyperparameter Grid</h3>
+                <div class="formula text-sm">
+                    <code>
+n_estimators: [100, 300]<br>
+max_depth: [3, 5, 7]<br>
+learning_rate: [0.05, 0.1, 0.2]<br>
+subsample: [0.8]<br>
+objective: reg:squarederror
+                    </code>
+                </div>
+                <p class="text-sm text-gray-500 mt-2">Hyperparameters are tuned via inner cross-validation (GridSearchCV).</p>
+            </div>
+        </section>
+
+        <!-- Section 3: Cross-Validation -->
+        <section id="cross-validation" class="card p-6 mb-6">
+            <h2 class="text-xl font-bold text-white mb-4">3. Cross-Validation Methodology</h2>
+
+            <div class="space-y-4 text-gray-300">
+                <p class="text-sm">
+                    The model uses <strong>repeated nested cross-validation</strong> to generate prediction distributions.
+                    This approach prevents data leakage and provides uncertainty estimates.
+                </p>
+
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="bg-gray-800/50 rounded-lg p-4 text-center">
+                        <p class="text-3xl font-bold text-blue-400">10</p>
+                        <p class="text-sm text-gray-400">CV Repeats</p>
+                    </div>
+                    <div class="bg-gray-800/50 rounded-lg p-4 text-center">
+                        <p class="text-3xl font-bold text-blue-400">5</p>
+                        <p class="text-sm text-gray-400">Folds per Repeat</p>
+                    </div>
+                    <div class="bg-gray-800/50 rounded-lg p-4 text-center">
+                        <p class="text-3xl font-bold text-green-400">50</p>
+                        <p class="text-sm text-gray-400">Predictions per Stock</p>
+                    </div>
+                </div>
+
+                <h3 class="font-semibold text-gray-200 mt-4">K-Fold Cross-Validation Diagram</h3>
+                <p class="text-sm text-gray-400 mb-3">Each row shows one fold. Blue = training data, Red = test data (held-out).</p>
+
+                <div class="space-y-1">
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs text-gray-500 w-12">Fold 1</span>
+                        <div class="cv-diagram flex-1">
+                            <div class="cv-fold cv-test">Test</div>
+                            <div class="cv-fold cv-train"></div>
+                            <div class="cv-fold cv-train"></div>
+                            <div class="cv-fold cv-train"></div>
+                            <div class="cv-fold cv-train"></div>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs text-gray-500 w-12">Fold 2</span>
+                        <div class="cv-diagram flex-1">
+                            <div class="cv-fold cv-train"></div>
+                            <div class="cv-fold cv-test">Test</div>
+                            <div class="cv-fold cv-train"></div>
+                            <div class="cv-fold cv-train"></div>
+                            <div class="cv-fold cv-train"></div>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs text-gray-500 w-12">Fold 3</span>
+                        <div class="cv-diagram flex-1">
+                            <div class="cv-fold cv-train"></div>
+                            <div class="cv-fold cv-train"></div>
+                            <div class="cv-fold cv-test">Test</div>
+                            <div class="cv-fold cv-train"></div>
+                            <div class="cv-fold cv-train"></div>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs text-gray-500 w-12">Fold 4</span>
+                        <div class="cv-diagram flex-1">
+                            <div class="cv-fold cv-train"></div>
+                            <div class="cv-fold cv-train"></div>
+                            <div class="cv-fold cv-train"></div>
+                            <div class="cv-fold cv-test">Test</div>
+                            <div class="cv-fold cv-train"></div>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs text-gray-500 w-12">Fold 5</span>
+                        <div class="cv-diagram flex-1">
+                            <div class="cv-fold cv-train"></div>
+                            <div class="cv-fold cv-train"></div>
+                            <div class="cv-fold cv-train"></div>
+                            <div class="cv-fold cv-train"></div>
+                            <div class="cv-fold cv-test">Test</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-gray-800/50 rounded-lg p-4 mt-4">
+                    <h4 class="font-semibold text-gray-200 mb-2">Why Repeated CV?</h4>
+                    <ul class="text-sm space-y-1 list-disc list-inside text-gray-400">
+                        <li><strong class="text-gray-300">Uncertainty quantification:</strong> The standard deviation across 50 predictions measures model confidence</li>
+                        <li><strong class="text-gray-300">Robustness:</strong> Averaging reduces sensitivity to specific train/test splits</li>
+                        <li><strong class="text-gray-300">No data leakage:</strong> Each prediction is made on held-out data the model has never seen</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <!-- Section 4: Features -->
+        <section id="features" class="card p-6 mb-6">
+            <h2 class="text-xl font-bold text-white mb-4">4. Feature Engineering</h2>
+
+            <div class="space-y-4 text-gray-300">
+                <p class="text-sm">
+                    Features are extracted from quarterly financial statements. The model uses a combination of
+                    raw fundamentals and financial ratios.
+                </p>
+
+                <h3 class="font-semibold text-gray-200">Core Features</h3>
+                <div class="overflow-x-auto">
+                    <table class="feature-table w-full text-sm mt-2">
+                        <thead>
+                            <tr class="text-left text-gray-400">
+                                <th>Feature</th>
+                                <th>Category</th>
+                                <th>Transform</th>
+                                <th>Fill Strategy</th>
+                            </tr>
+                        </thead>
+                        <tbody class="text-gray-300">
+                            <tr>
+                                <td>Total Revenue</td>
+                                <td>Fundamentals</td>
+                                <td>log1p</td>
+                                <td>Required</td>
+                            </tr>
+                            <tr>
+                                <td>Gross Profit</td>
+                                <td>Fundamentals</td>
+                                <td>log1p</td>
+                                <td>Zero</td>
+                            </tr>
+                            <tr>
+                                <td>EBITDA</td>
+                                <td>Fundamentals</td>
+                                <td>log1p</td>
+                                <td>Median</td>
+                            </tr>
+                            <tr>
+                                <td>Net Income</td>
+                                <td>Fundamentals</td>
+                                <td>-</td>
+                                <td>Zero</td>
+                            </tr>
+                            <tr>
+                                <td>Total Debt</td>
+                                <td>Balance Sheet</td>
+                                <td>log1p</td>
+                                <td>Zero</td>
+                            </tr>
+                            <tr>
+                                <td>Total Cash</td>
+                                <td>Balance Sheet</td>
+                                <td>log1p</td>
+                                <td>Zero</td>
+                            </tr>
+                            <tr>
+                                <td>Free Cash Flow</td>
+                                <td>Cash Flow</td>
+                                <td>-</td>
+                                <td>Zero</td>
+                            </tr>
+                            <tr>
+                                <td>Profit Margin</td>
+                                <td>Ratio</td>
+                                <td>-</td>
+                                <td>Median</td>
+                            </tr>
+                            <tr>
+                                <td>Debt-to-Equity</td>
+                                <td>Ratio</td>
+                                <td>log</td>
+                                <td>Median</td>
+                            </tr>
+                            <tr>
+                                <td>ROE / ROA</td>
+                                <td>Ratio</td>
+                                <td>-</td>
+                                <td>Median</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="bg-amber-900/20 border border-amber-700/30 rounded-lg p-4 mt-4">
+                    <h4 class="font-semibold text-amber-300 mb-2">Current Data Limitation</h4>
+                    <p class="text-sm">
+                        Due to data ingestion constraints, only <strong>~90% of stocks have revenue data</strong>.
+                        Other financial statement items (profit, debt, cash, FCF) have less than 1% availability.
+                        The model currently operates primarily on revenue as the main feature.
+                    </p>
+                </div>
+
+                <h3 class="font-semibold text-gray-200 mt-4">Transforms Explained</h3>
+                <ul class="text-sm space-y-2 list-disc list-inside text-gray-400">
+                    <li><strong class="text-gray-300">log1p:</strong> Applies log(1 + x) to handle large scale differences and zeros</li>
+                    <li><strong class="text-gray-300">log:</strong> Standard log transform for ratio features (excludes zeros)</li>
+                    <li><strong class="text-gray-300">Median fill:</strong> Replaces missing values with sector/industry median</li>
+                    <li><strong class="text-gray-300">Zero fill:</strong> Assumes missing financial data indicates zero (conservative)</li>
+                </ul>
+            </div>
+        </section>
+
+        <!-- Section 5: Mispricing Calculation -->
+        <section id="mispricing" class="card p-6 mb-6">
+            <h2 class="text-xl font-bold text-white mb-4">5. Mispricing Calculation</h2>
+
+            <div class="space-y-4 text-gray-300">
+                <h3 class="font-semibold text-gray-200">Raw Mispricing</h3>
+                <div class="formula text-center">
+                    <code class="text-lg">
+                        mispricing = (predicted_mcap - actual_mcap) / actual_mcap
+                    </code>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                    <div class="bg-green-900/20 border border-green-700/30 rounded-lg p-4">
+                        <h4 class="font-semibold text-green-300 mb-2">Positive Mispricing</h4>
+                        <p class="text-sm">
+                            Model predicts <strong>higher</strong> fair value than current market cap.
+                            Suggests potential <strong>undervaluation</strong> based on fundamentals.
+                        </p>
+                    </div>
+                    <div class="bg-red-900/20 border border-red-700/30 rounded-lg p-4">
+                        <h4 class="font-semibold text-red-300 mb-2">Negative Mispricing</h4>
+                        <p class="text-sm">
+                            Model predicts <strong>lower</strong> fair value than current market cap.
+                            Suggests potential <strong>overvaluation</strong> based on fundamentals.
+                        </p>
+                    </div>
+                </div>
+
+                <h3 class="font-semibold text-gray-200 mt-6">Size Premium Correction</h3>
+                <p class="text-sm text-gray-400">
+                    Raw mispricing exhibits a systematic size effect: smaller companies tend to show positive mispricing
+                    while larger companies show negative mispricing. This reflects the historical "size premium" where
+                    smaller companies trade at higher multiples.
+                </p>
+
+                <div class="formula text-center mt-3">
+                    <code class="text-lg">
+                        size_neutral_mispricing = raw_mispricing - size_premium(market_cap)
+                    </code>
+                </div>
+
+                <p class="text-sm text-gray-400 mt-3">
+                    The size premium is estimated by fitting a smooth curve (spline or polynomial) to the
+                    mispricing vs. market cap relationship. This correction isolates stock-specific mispricing
+                    from the systematic size effect.
+                </p>
+
+                <div class="bg-gray-800/50 rounded-lg p-4 mt-4">
+                    <h4 class="font-semibold text-gray-200 mb-2">When to Use Each Mode</h4>
+                    <ul class="text-sm space-y-1 list-disc list-inside text-gray-400">
+                        <li><strong class="text-gray-300">Raw:</strong> Compare stocks within similar market cap ranges</li>
+                        <li><strong class="text-gray-300">Size-Neutral:</strong> Compare stocks across different market caps (recommended)</li>
+                    </ul>
+                </div>
+
+                <h3 class="font-semibold text-gray-200 mt-6">Uncertainty Measure</h3>
+                <div class="formula text-center">
+                    <code class="text-lg">
+                        relative_std = prediction_std / actual_mcap
+                    </code>
+                </div>
+                <p class="text-sm text-gray-400 mt-3">
+                    Higher relative standard deviation indicates less confident predictions. Stocks with unusual
+                    financial profiles or sparse comparable data will have higher uncertainty.
+                </p>
+            </div>
+        </section>
+
+        <!-- Section 6: Backtesting -->
+        <section id="backtesting" class="card p-6 mb-6">
+            <h2 class="text-xl font-bold text-white mb-4">6. Signal Quality & Backtesting</h2>
+
+            <div class="space-y-4 text-gray-300">
+                <p class="text-sm">
+                    Backtest results measure whether historical mispricing signals predicted future price movements.
+                </p>
+
+                <h3 class="font-semibold text-gray-200">Information Coefficient (IC)</h3>
+                <div class="formula text-center">
+                    <code class="text-lg">
+                        IC = correlation(mispricing_signal, future_return)
+                    </code>
+                </div>
+
+                <div class="bg-gray-800/50 rounded-lg p-4 mt-3">
+                    <h4 class="font-semibold text-gray-200 mb-2">Interpreting IC</h4>
+                    <ul class="text-sm space-y-1 text-gray-400">
+                        <li><strong class="text-green-400">IC &gt; 0:</strong> Positive mispricing (undervalued) stocks outperformed</li>
+                        <li><strong class="text-gray-400">IC ~ 0:</strong> No predictive signal</li>
+                        <li><strong class="text-red-400">IC &lt; 0:</strong> Negative mispricing (overvalued) stocks outperformed</li>
+                    </ul>
+                    <p class="text-sm text-gray-500 mt-2">
+                        Note: On the dashboard, IC is displayed such that <strong>positive = good signal</strong>
+                        (overvalued stocks went down, undervalued went up).
+                    </p>
+                </div>
+
+                <h3 class="font-semibold text-gray-200 mt-6">Hit Rate</h3>
+                <div class="formula text-center">
+                    <code class="text-lg">
+                        hit_rate = % of stocks where mispricing direction matched return direction
+                    </code>
+                </div>
+                <p class="text-sm text-gray-400 mt-3">
+                    A hit rate above 50% indicates the signal has some directional predictive power.
+                    However, magnitude of returns matters more than hit rate for portfolio construction.
+                </p>
+
+                <h3 class="font-semibold text-gray-200 mt-6">Statistical Significance</h3>
+                <p class="text-sm text-gray-400">
+                    P-values are corrected using the <strong>Benjamini-Hochberg procedure</strong> to control
+                    false discovery rate when testing multiple hypotheses (horizons x sectors/indices).
+                </p>
+
+                <div class="bg-gray-800/50 rounded-lg p-4 mt-3">
+                    <h4 class="font-semibold text-gray-200 mb-2">Significance Stars</h4>
+                    <ul class="text-sm space-y-1 text-gray-400">
+                        <li><span class="text-yellow-400">&#9733;</span> p &lt; 0.05 (significant)</li>
+                        <li><span class="text-yellow-400">&#9733;&#9733;</span> p &lt; 5e-4 (highly significant)</li>
+                        <li><span class="text-yellow-400">&#9733;&#9733;&#9733;</span> p &lt; 5e-8 (extremely significant)</li>
+                    </ul>
+                </div>
+
+                <h3 class="font-semibold text-gray-200 mt-6">Horizon Analysis</h3>
+                <p class="text-sm text-gray-400">
+                    Backtests are run across multiple forward-looking horizons (e.g., 5, 10, 21, 63, 126 trading days)
+                    to understand signal persistence and decay. Shorter horizons capture momentum effects while
+                    longer horizons reflect fundamental mean reversion.
+                </p>
+            </div>
+        </section>
+
+        <!-- Section 7: Limitations -->
+        <section id="limitations" class="card p-6 mb-6">
+            <h2 class="text-xl font-bold text-white mb-4">7. Limitations & Caveats</h2>
+
+            <div class="space-y-4 text-gray-300">
+                <div class="bg-red-900/20 border border-red-700/30 rounded-lg p-4">
+                    <h3 class="font-semibold text-red-300 mb-2">Not Financial Advice</h3>
+                    <p class="text-sm">
+                        This tool is for research and educational purposes only. The mispricing signals should not
+                        be used as the sole basis for investment decisions. Always consult with a qualified
+                        financial advisor and conduct your own due diligence.
+                    </p>
+                </div>
+
+                <h3 class="font-semibold text-gray-200">Model Limitations</h3>
+                <ul class="text-sm space-y-2 list-disc list-inside text-gray-400">
+                    <li>
+                        <strong class="text-gray-300">Backward-looking fundamentals:</strong>
+                        Financial statements are historical. The model cannot capture future growth expectations,
+                        pending acquisitions, or unreleased products.
+                    </li>
+                    <li>
+                        <strong class="text-gray-300">No intangibles:</strong>
+                        Brand value, intellectual property, network effects, and other intangible assets are
+                        not directly measured in financial statements.
+                    </li>
+                    <li>
+                        <strong class="text-gray-300">Cross-sectional only:</strong>
+                        The model compares companies at a single point in time. It does not model time-series
+                        dynamics or macroeconomic factors.
+                    </li>
+                    <li>
+                        <strong class="text-gray-300">Sector mixing:</strong>
+                        The model trains on all sectors together. Industry-specific valuation multiples
+                        may not be fully captured.
+                    </li>
+                    <li>
+                        <strong class="text-gray-300">Survivorship bias:</strong>
+                        The dataset includes currently traded stocks. Delisted companies are not included
+                        in backtests.
+                    </li>
+                </ul>
+
+                <h3 class="font-semibold text-gray-200 mt-4">Data Limitations</h3>
+                <ul class="text-sm space-y-2 list-disc list-inside text-gray-400">
+                    <li>
+                        <strong class="text-gray-300">Incomplete financials:</strong>
+                        Currently only ~90% of stocks have revenue data. Other fundamentals have &lt;1% coverage.
+                    </li>
+                    <li>
+                        <strong class="text-gray-300">Point-in-time accuracy:</strong>
+                        Quarterly snapshots may not perfectly align with earnings release dates.
+                    </li>
+                    <li>
+                        <strong class="text-gray-300">Market cap timing:</strong>
+                        Historical market caps are reconstructed from price × shares outstanding.
+                    </li>
+                </ul>
+
+                <h3 class="font-semibold text-gray-200 mt-4">Backtest Caveats</h3>
+                <ul class="text-sm space-y-2 list-disc list-inside text-gray-400">
+                    <li>
+                        <strong class="text-gray-300">Look-ahead bias:</strong>
+                        Model hyperparameters were tuned on the full dataset. True out-of-sample
+                        performance may differ.
+                    </li>
+                    <li>
+                        <strong class="text-gray-300">Transaction costs:</strong>
+                        Backtests do not include trading costs, slippage, or market impact.
+                    </li>
+                    <li>
+                        <strong class="text-gray-300">Past performance:</strong>
+                        Historical signal quality does not guarantee future results.
+                    </li>
+                </ul>
+            </div>
+        </section>
+
+        <!-- Footer -->
+        <footer class="text-center text-sm text-gray-500 py-6">
+            <a href="index.html" class="text-blue-400 hover:text-blue-300">&larr; Back to Dashboard</a>
+        </footer>
+
+    </div>
+
+</body>
+
+</html>

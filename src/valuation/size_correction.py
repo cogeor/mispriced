@@ -159,76 +159,72 @@ class SizePremiumEstimate:
 def estimate_size_premium(
     mispricing: np.ndarray,
     market_cap: np.ndarray,
-    frac: float = 0.3,  # Kept for signature compatibility, unused by Spline
+    frac: float = 0.3,  # Unused, kept for API compatibility
+    winsorize_pct: Tuple[float, float] = (2.0, 98.0),
 ) -> SizePremiumEstimate:
     """
-    Estimate the size premium using Cubic Spline.
-    
-    The size premium is E[mispricing | size], estimated non-parametrically.
-    
+    Estimate the size premium using quadratic polynomial fit.
+
+    Model: E[mispricing | log(mcap)] = α + β*log(mcap) + γ*log(mcap)²
+
+    Quadratic fit captures non-linear size effects while remaining stable.
+    Data is winsorized before fitting to reduce influence of extreme outliers.
+
     Args:
         mispricing: Raw mispricing values (any metric)
         market_cap: Market cap values (will be log-transformed)
         frac: Unused (kept for API compatibility)
-        
+        winsorize_pct: Percentile bounds for winsorization (default 2nd to 98th)
+
     Returns:
-        SizePremiumEstimate with fitted curve
+        SizePremiumEstimate with fitted quadratic curve
     """
-    from scipy.interpolate import UnivariateSpline
-    
     # Filter valid data
     valid_mask = (
-        np.isfinite(mispricing) & 
-        np.isfinite(market_cap) & 
+        np.isfinite(mispricing) &
+        np.isfinite(market_cap) &
         (market_cap > 0)
     )
     mispricing_valid = mispricing[valid_mask]
     mcap_valid = market_cap[valid_mask]
-    
-    if len(mispricing_valid) < 50:
+
+    if len(mispricing_valid) < 20:
         logger.warning(f"Only {len(mispricing_valid)} valid observations for size premium estimation")
-        return _estimate_size_premium_linear(mispricing, market_cap)
-    
-    # Log transform market cap
-    log_mcap = np.log(mcap_valid)
-    
-    # Sort by size (required for spline)
-    sort_idx = np.argsort(log_mcap)
-    x = log_mcap[sort_idx]
-    y = mispricing_valid[sort_idx]
-    
-    # Handle duplicates in X by averaging Y (Spline prefers unique X)
-    x_unique, unique_indices = np.unique(x, return_inverse=True)
-    y_unique = np.zeros_like(x_unique)
-    counts = np.zeros_like(x_unique)
-    np.add.at(y_unique, unique_indices, y)
-    np.add.at(counts, unique_indices, 1)
-    y_unique /= counts
-    
-    # Fit Cubic Spline (k=3)
-    # s=None lets it find optimal smoothing. 
-    # We can control s via number of points.
-    # For financial data, we want significant smoothing.
-    # We'll use a smoothing factor relative to N to avoid overfitting.
-    try:
-        n = len(x_unique)
-        s = n * 0.05 if n > 100 else None # Heuristic smoothing
-        spline = UnivariateSpline(x_unique, y_unique, k=3, s=s)
-        
-        # Evaluate on a grid for the 'expected' curve
-        grid_x = np.linspace(x.min(), x.max(), 200)
-        grid_y = spline(grid_x)
-        
+        # Return zero correction
+        grid = np.linspace(15, 30, 100)
         return SizePremiumEstimate(
-            log_mcap_grid=grid_x,
-            expected_mispricing=grid_y,
+            log_mcap_grid=grid,
+            expected_mispricing=np.zeros_like(grid),
             n_observations=len(mispricing_valid),
-            estimation_method="cubic_spline",
+            estimation_method="constant_zero",
             smoothing_frac=0.0,
         )
-    except Exception as e:
-        logger.error(f"Spline fitting failed: {e}. Falling back to linear.")
-        return _estimate_size_premium_linear(mispricing, market_cap)
+
+    # Winsorize mispricing to reduce influence of extreme outliers
+    lower_pct, upper_pct = winsorize_pct
+    lower_bound = np.percentile(mispricing_valid, lower_pct)
+    upper_bound = np.percentile(mispricing_valid, upper_pct)
+    mispricing_winsorized = np.clip(mispricing_valid, lower_bound, upper_bound)
+
+    # Log transform market cap
+    log_mcap = np.log(mcap_valid)
+
+    # Fit quadratic polynomial: mispricing = α + β*log(mcap) + γ*log(mcap)²
+    coeffs = np.polyfit(log_mcap, mispricing_winsorized, 2)
+
+    # Create grid for expected values
+    grid_x = np.linspace(log_mcap.min(), log_mcap.max(), 100)
+    grid_y = np.polyval(coeffs, grid_x)
+
+    logger.info(f"Size premium (quadratic): a={coeffs[0]:.6f}, b={coeffs[1]:.4f}, c={coeffs[2]:.4f}")
+
+    return SizePremiumEstimate(
+        log_mcap_grid=grid_x,
+        expected_mispricing=grid_y,
+        n_observations=len(mispricing_valid),
+        estimation_method="quadratic",
+        smoothing_frac=0.0,
+    )
 
 
 def _estimate_size_premium_linear(
@@ -280,32 +276,32 @@ def compute_residual_mispricing(
 ) -> Tuple[np.ndarray, SizePremiumEstimate]:
     """
     Compute size-neutral (residual) mispricing.
-    
+
     residual = mispricing - E[mispricing | size]
-    
+
     This is the tradable alpha signal, with structural size effects removed.
-    
+
     Args:
         mispricing: Raw mispricing values
         market_cap: Market cap values
         size_premium: Pre-computed size premium. If None, will be estimated.
-        
+
     Returns:
         Tuple of (residual_mispricing, size_premium_estimate)
     """
     if size_premium is None:
         size_premium = estimate_size_premium(mispricing, market_cap)
-    
+
     # Get expected mispricing for each observation
     valid_mask = (market_cap > 0) & np.isfinite(market_cap)
     log_mcap = np.zeros_like(market_cap)
     log_mcap[valid_mask] = np.log(market_cap[valid_mask])
-    
+
     expected = size_premium.get_expected_mispricing(log_mcap)
-    
+
     # Residual = actual - expected
     residual = mispricing - expected
-    
+
     return residual, size_premium
 
 

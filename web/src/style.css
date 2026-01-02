@@ -33,14 +33,22 @@ body {
     border: 1px solid var(--border-color);
 }
 
-.positive { color: var(--accent-green); }
-.negative { color: var(--accent-red); }
+.positive {
+    color: var(--accent-green);
+}
 
-.table-row:hover { background: rgba(255,255,255,0.03); }
+.negative {
+    color: var(--accent-red);
+}
+
+.table-row:hover {
+    background: rgba(255, 255, 255, 0.03);
+}
 
 .toggle-btn {
     @apply px-3 py-1 text-xs font-medium rounded-md transition-colors border border-gray-700 text-gray-400;
 }
+
 .toggle-btn.active {
     @apply bg-blue-600 text-white border-blue-500;
 }
@@ -48,7 +56,7 @@ body {
 /* Tooltip styles */
 .tooltip {
     position: absolute;
-    background: rgba(0,0,0,0.9);
+    background: rgba(0, 0, 0, 0.9);
     border: 1px solid var(--border-color);
     padding: 8px;
     border-radius: 4px;
@@ -56,4 +64,14 @@ body {
     z-index: 1000;
     font-size: 12px;
     display: none;
+}
+
+/* Sticky Header */
+.dashboard-header {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: var(--bg-primary);
+    border-bottom: 1px solid var(--border-color);
+    padding: 1rem 0;
 }

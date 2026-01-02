@@ -1,37 +1,56 @@
 import Plotly from 'plotly.js-dist-min';
-import type { ScatterPoint } from '../types';
+import type { ScatterPoint, ColorMode, MetricKey } from '../types';
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+type PlotData = any;
+type PlotLayout = any;
+
+const PLOT_BG_COLOR = 'rgba(0,0,0,0)';
+const PAPER_BG_COLOR = 'rgba(0,0,0,0)';
+const TEXT_COLOR = '#e5e7eb';
+const GRID_COLOR = '#374151';
+const HOVER_BG = '#1f2937';
+const HOVER_BORDER = '#374151';
 
 export function renderValuationMap(
     data: ScatterPoint[],
     elementId: string,
-    colorBy: 'sector' | 'mispricing',
-    metricKey: 'mispricing' | 'residualMispricing'
-) {
+    colorBy: ColorMode,
+    metricKey: MetricKey
+): void {
     const el = document.getElementById(elementId);
     if (!el) return;
 
-    const x = data.map(d => d.actual); // Billions
-    const y = data.map(d => d.predicted); // Billions
+    const isResidual = metricKey === 'residualMispricing';
+    // Helper to get displayed predicted value based on mode
+    const getPredicted = (d: ScatterPoint): number =>
+        isResidual ? d.actual * (1 + (d.residualMispricing || 0)) : d.predicted;
+
+    // Swap axes: x = predicted, y = actual
+    const x = data.map(d => getPredicted(d));
+    const y = data.map(d => d.actual);
     const text = data.map(d => {
-        const mVal = d[metricKey];
-        const mPct = (mVal * 100).toFixed(1) + '%';
-        return `${d.company} (${d.ticker})<br>Sector: ${d.sector}<br>Actual: $${d.actual.toFixed(2)}B<br>Predicted: $${d.predicted.toFixed(2)}B<br>Mispricing: ${mPct}`;
+        // Negate mispricing so positive = overvalued
+        const mVal = -(d[metricKey]);
+        const mPct = (mVal > 0 ? '+' : '') + (mVal * 100).toFixed(1) + '%';
+        const uncert = ((d.relStd || 0) * 100).toFixed(1) + '%';
+        return `<b>${d.company} (${d.ticker})</b><br>${d.sector}<br><br>Predicted: $${getPredicted(d).toFixed(2)}B<br>Actual: $${d.actual.toFixed(2)}B<br>Mispricing: <b>${mPct}</b><br>Uncertainty: ±${uncert}`;
     });
 
     const customdata = data.map(d => [d.ticker, d.sector, d.company, d[metricKey]]);
 
-    let markerColor: any;
+    let markerColor: string[] | number[];
     let showScale = false;
 
     if (colorBy === 'sector') {
         markerColor = data.map(d => d.sectorColor);
     } else {
-        const mValues = data.map(d => d[metricKey]); // -1 to 1 usually
-        markerColor = mValues;
+        // Negate so positive = overvalued
+        markerColor = data.map(d => -(d[metricKey]));
         showScale = true;
     }
 
-    const trace: any = {
+    const trace: PlotData = {
         x: x,
         y: y,
         mode: 'markers',
@@ -43,67 +62,82 @@ export function renderValuationMap(
             size: 8,
             color: markerColor,
             opacity: 0.8,
-            line: { width: 1, color: '#1a1d24' }
+            line: { width: 1, color: '#111827' }
         }
     };
 
     if (showScale) {
-        trace.marker.colorscale = 'RdYlGn';
-        trace.marker.reversescale = true;
+        // After negation: Red (undervalued/negative) to Green (overvalued/positive)
+        trace.marker.colorscale = [
+            [0, 'rgba(239, 68, 68, 0.9)'],  // Red for negative (undervalued)
+            [0.5, 'rgba(156, 163, 175, 0.2)'],
+            [1, 'rgba(34, 197, 94, 0.9)']   // Green for positive (overvalued)
+        ];
         trace.marker.cmin = -0.5;
         trace.marker.cmax = 0.5;
         trace.marker.colorbar = {
             title: 'Mispricing',
-            thickness: 10,
+            thickness: 12,
             tickformat: '.0%',
-            tickfont: { color: '#8b919a' }
+            tickfont: { color: TEXT_COLOR },
+            titlefont: { color: TEXT_COLOR }
         };
     }
 
-    // Diagonal Line
-    const minVal = Math.min(...x, ...y) * 0.8;
-    const maxVal = Math.max(...x, ...y) * 1.2;
+    // Use actual market cap (y) values for consistent axis range across modes
+    // This ensures axes stay the same when switching between Raw and Size-Neutral
+    const actualValues = data.map(d => d.actual).filter(v => v > 0);
+    const actualMin = Math.min(...actualValues);
+    const actualMax = Math.max(...actualValues);
+    const rangeMin = actualMin * 0.5;
+    const rangeMax = actualMax * 2;
 
-    const layout = {
-        margin: { t: 20, r: 20, b: 40, l: 60 },
-        paper_bgcolor: 'rgba(0,0,0,0)',
-        plot_bgcolor: 'rgba(0,0,0,0)',
+    const layout: PlotLayout = {
+        margin: { t: 20, r: 20, b: 50, l: 60 },
+        paper_bgcolor: PAPER_BG_COLOR,
+        plot_bgcolor: PLOT_BG_COLOR,
         xaxis: {
-            title: 'Actual Market Cap ($B)',
-            type: 'log',
-            gridcolor: '#2a2e38',
-            zerolinecolor: '#2a2e38',
-            tickfont: { color: '#8b919a' },
-            titlefont: { color: '#8b919a' }
-        },
-        yaxis: {
             title: 'Predicted Market Cap ($B)',
             type: 'log',
-            gridcolor: '#2a2e38',
-            zerolinecolor: '#2a2e38',
-            tickfont: { color: '#8b919a' },
-            titlefont: { color: '#8b919a' }
+            range: [Math.log10(rangeMin), Math.log10(rangeMax)],
+            gridcolor: GRID_COLOR,
+            tickfont: { color: TEXT_COLOR },
+            titlefont: { color: TEXT_COLOR },
+            zerolinecolor: GRID_COLOR
+        },
+        yaxis: {
+            title: 'Actual Market Cap ($B)',
+            type: 'log',
+            range: [Math.log10(rangeMin), Math.log10(rangeMax)],
+            gridcolor: GRID_COLOR,
+            tickfont: { color: TEXT_COLOR },
+            titlefont: { color: TEXT_COLOR },
+            zerolinecolor: GRID_COLOR
         },
         shapes: [
             {
                 type: 'line',
-                x0: minVal, y0: minVal,
-                x1: maxVal, y1: maxVal,
-                line: { color: '#2a2e38', width: 2, dash: 'dot' }
+                x0: rangeMin, y0: rangeMin,
+                x1: rangeMax, y1: rangeMax,
+                line: { color: '#4b5563', width: 2, dash: 'dot' }
             }
         ],
-        hoverlabel: { bgcolor: '#1a1d24', bordercolor: '#2a2e38', font: { color: '#e8eaed' } }
+        hoverlabel: { bgcolor: HOVER_BG, bordercolor: HOVER_BORDER, font: { color: '#f3f4f6' } },
+        showlegend: false
     };
 
     const config = { responsive: true, displayModeBar: false };
+    Plotly.react(elementId, [trace], layout, config);
 
-    Plotly.newPlot(elementId, [trace], layout, config);
-
-    // Click event
-    (el as any).removeAllListeners?.('plotly_click'); // Remove if generic Element doesn't have it, but Plotly adds it
-    (el as any).on('plotly_click', (data: any) => {
-        const pt = data.points[0];
-        const ticker = pt.customdata[0];
-        window.open(`https://www.google.com/finance/quote/${ticker}:NYSE`, '_blank');
-    });
+    // Add click handler
+    const plotEl = el as unknown as { on: (event: string, handler: (data: unknown) => void) => void; removeAllListeners?: (event: string) => void };
+    if (plotEl.on) {
+        plotEl.removeAllListeners?.('plotly_click');
+        plotEl.on('plotly_click', (eventData: unknown) => {
+            const data = eventData as { points: Array<{ customdata: [string, string, string, number] }> };
+            const pt = data.points[0];
+            const ticker = pt.customdata[0];
+            window.open(`https://www.google.com/finance/quote/${ticker}:NYSE`, '_blank');
+        });
+    }
 }
