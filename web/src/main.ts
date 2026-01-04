@@ -31,7 +31,7 @@ let filteredStockData: ScatterPoint[] = [];
 
 async function init(): Promise<void> {
     try {
-        const response = await fetch('/public/dashboard_data.json');
+        const response = await fetch('/dashboard_data.json');
         if (!response.ok) throw new Error(`HTTP ${response.status} loading data`);
         dashboardData = await response.json();
 
@@ -311,7 +311,7 @@ async function fetchQuarterData(quarter: string): Promise<QuarterValuationData |
     }
 
     try {
-        const response = await fetch(`/public/quarters/${quarter}.json`);
+        const response = await fetch(`/quarters/${quarter}.json`);
         if (!response.ok) {
             console.warn(`Failed to load quarter data for ${quarter}: HTTP ${response.status}`);
             return null;
