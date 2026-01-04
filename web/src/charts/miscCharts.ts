@@ -97,7 +97,7 @@ export function renderSectorChart(
         hoverlabel: { bgcolor: HOVER_BG, bordercolor: HOVER_BORDER, font: { color: '#f3f4f6' } }
     };
 
-    Plotly.newPlot(elementId, [trace], layout, { responsive: true, displayModeBar: false });
+    Plotly.react(elementId, [trace], layout, { responsive: true, displayModeBar: false });
 }
 
 export function renderSectorLegend(scatterData: ScatterPoint[]): void {
@@ -162,7 +162,7 @@ export function renderUncertaintyChart(
         showlegend: false
     };
 
-    Plotly.newPlot(elementId, [trace], layout, { responsive: true, displayModeBar: false });
+    Plotly.react(elementId, [trace], layout, { responsive: true, displayModeBar: false });
 }
 
 export function renderSizePremiumChart(data: SizeCoefficient[], elementId: string): void {
@@ -212,5 +212,5 @@ export function renderSizePremiumChart(data: SizeCoefficient[], elementId: strin
         hoverlabel: { bgcolor: HOVER_BG, bordercolor: HOVER_BORDER, font: { color: '#f3f4f6' } }
     };
 
-    Plotly.newPlot(elementId, [trace], layout, { responsive: true, displayModeBar: false });
+    Plotly.react(elementId, [trace], layout, { responsive: true, displayModeBar: false });
 }

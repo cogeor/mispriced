@@ -347,106 +347,6 @@ function updateStats(): void {
     // Note: HTML already has % after this span
     setText('avgMispricing', (negAvg > 0 ? '+' : '') + (negAvg * 100).toFixed(1));
 }
-
-/**
- * Progressive rendering of all charts with current data.
- * Uses requestAnimationFrame to avoid blocking the main thread.
- * Called by updateCharts() after data fetch and by setMode() for fast switching.
- */
-async function renderAllCharts(metricKey: MetricKey, progressive: boolean = true): Promise<void> {
-    if (!dashboardData) return;
-
-    // Helper to render with optional frame break
-    const render = async (fn: () => void) => {
-        if (progressive) await nextFrame();
-        fn();
-    };
-
-    // Main valuation map first (most important, above fold)
-    await render(() => renderValuationMap(currentScatterData, 'valuationChart', colorBy, metricKey));
-
-    // Sector and index charts (visible on scroll)
-    await render(() => {
-        renderSectorChart(currentScatterData, 'sectorChart', metricKey);
-        renderIndexChart(dashboardData!.index_chart_data, currentScatterData, 'indexChart', metricKey);
-    });
-
-    // Initialize default enabled indices (highest mcap) if not set
-    if (enabledIndices.size === 0 && dashboardData.index_timeseries.length > 0) {
-        const indexCounts: Record<string, number> = {};
-        dashboardData.index_timeseries.forEach(d => {
-            indexCounts[d.index] = (indexCounts[d.index] || 0) + d.count;
-        });
-        const sortedIndices = Object.entries(indexCounts)
-            .sort((a, b) => b[1] - a[1])
-            .map(([idx]) => idx);
-        if (sortedIndices.length > 0) {
-            enabledIndices.add(sortedIndices[0]); // Add highest mcap index
-        }
-    }
-
-    // Time series charts
-    await render(() => {
-        renderIndexTimeSeriesMulti(dashboardData!.index_timeseries, 'indexTimeSeriesChart', metricKey, enabledIndices);
-        renderSectorTimeSeriesMulti(dashboardData!.sector_timeseries, 'sectorTimeSeriesChart', metricKey, enabledSectors);
-    });
-
-    const backtestMetricKey = mispricingMode === 'sizeNeutral' ? 'residual' : 'raw';
-
-    // Compute sector mcap for ordering
-    const sectorMcap = new Map<string, number>();
-    dashboardData.scatter_data.forEach(d => {
-        sectorMcap.set(d.sector, (sectorMcap.get(d.sector) || 0) + d.actual);
-    });
-    // Add Global with total mcap
-    const totalMcap = dashboardData.scatter_data.reduce((sum, d) => sum + d.actual, 0);
-    sectorMcap.set('Global', totalMcap);
-
-    // Compute index mcap for ordering (from index_chart_data)
-    const indexMcap = new Map<string, number>();
-    dashboardData.index_chart_data.forEach(d => {
-        // Use count as proxy since actual mcap not directly available
-        indexMcap.set(d.index, d.count);
-    });
-
-    // Backtest charts (lower priority, below fold)
-    await render(() => {
-        const sectorResult = aggregateToSummary(dashboardData!.backtest_data.sector_ts, selectedQuarter);
-        buildICHeatmap(sectorResult.data, 'icSectorChart', backtestMetricKey, sectorResult.quarter, sectorMcap, true);
-        const sectorDecayData = recomputeDecay(dashboardData!.backtest_data.sector_ts, backtestMetricKey, sectorResult.quarter);
-        renderSignalDecay(sectorDecayData, 'icSectorDecayChart');
-
-        const indexResult = aggregateToSummary(dashboardData!.backtest_data.index_ts, selectedQuarter);
-        buildICHeatmap(indexResult.data, 'icIndexChart', backtestMetricKey, indexResult.quarter, indexMcap, false);
-        const indexDecayData = recomputeDecay(dashboardData!.backtest_data.index_ts, backtestMetricKey, indexResult.quarter);
-        renderSignalDecay(indexDecayData, 'icIndexDecayChart');
-
-        // Show note if backtest quarter differs from selected quarter
-        const backtestNote = document.getElementById('backtestQuarterNote');
-        if (backtestNote) {
-            const usedQuarter = sectorResult.quarter || indexResult.quarter;
-            if (selectedQuarter && usedQuarter && selectedQuarter !== usedQuarter) {
-                backtestNote.textContent = `⚠ Showing ${formatQuarter(usedQuarter)} data (${formatQuarter(selectedQuarter)} not yet available)`;
-                backtestNote.style.display = 'inline';
-            } else {
-                backtestNote.style.display = 'none';
-            }
-        }
-    });
-
-    // Uncertainty and size premium charts
-    await render(() => {
-        renderUncertaintyChart(currentScatterData, 'uncertaintyChart', metricKey);
-        renderSizePremiumChart(dashboardData!.size_coefficients, 'sizePremiumChart');
-    });
-
-    // Stock table last (can be deferred)
-    await render(() => {
-        allStockData = [...currentScatterData];
-        renderStockTable(metricKey);
-    });
-}
-
 /**
  * Fetch data for selected quarter and render all charts.
  * Called on quarter change.
@@ -919,10 +819,63 @@ function setMode(mode: MispricingMode): void {
 
     if (dashboardData) {
         updateStats();
-        // Use cached data for instant mode switching (no progressive rendering)
+        // Fast mode switching - only update charts that depend on metric mode
         const metricKey: MetricKey = mode === 'sizeNeutral' ? 'residualMispricing' : 'mispricing';
-        renderAllCharts(metricKey, false);  // false = no progressive, instant switch
+        renderModeSpecificCharts(metricKey);
     }
+}
+
+/**
+ * Fast re-render for mode switching. Only updates charts affected by metric mode.
+ * Skips size premium chart (mode-independent) and uses synchronous rendering.
+ */
+function renderModeSpecificCharts(metricKey: MetricKey): void {
+    if (!dashboardData) return;
+
+    // Main charts that depend on metricKey
+    renderValuationMap(currentScatterData, 'valuationChart', colorBy, metricKey);
+    renderSectorChart(currentScatterData, 'sectorChart', metricKey);
+    renderIndexChart(dashboardData.index_chart_data, currentScatterData, 'indexChart', metricKey);
+
+    // Time series charts
+    renderIndexTimeSeriesMulti(dashboardData.index_timeseries, 'indexTimeSeriesChart', metricKey, enabledIndices);
+    renderSectorTimeSeriesMulti(dashboardData.sector_timeseries, 'sectorTimeSeriesChart', metricKey, enabledSectors);
+
+    // Backtest charts (switch between raw/residual)
+    const backtestMetricKey = mispricingMode === 'sizeNeutral' ? 'residual' : 'raw';
+
+    const sectorMcap = new Map<string, number>();
+    currentScatterData.forEach(d => {
+        sectorMcap.set(d.sector, (sectorMcap.get(d.sector) || 0) + d.actual);
+    });
+    const totalMcap = currentScatterData.reduce((sum, d) => sum + d.actual, 0);
+    sectorMcap.set('Global', totalMcap);
+
+    const indexMcap = new Map<string, number>();
+    dashboardData.index_chart_data.forEach(d => {
+        indexMcap.set(d.index, d.count);
+    });
+
+    if (backtestDataLoaded && dashboardData.backtest_data) {
+        const sectorResult = aggregateToSummary(dashboardData.backtest_data.sector_ts, selectedQuarter);
+        buildICHeatmap(sectorResult.data, 'icSectorChart', backtestMetricKey, sectorResult.quarter, sectorMcap, true);
+        const sectorDecayData = recomputeDecay(dashboardData.backtest_data.sector_ts, backtestMetricKey, sectorResult.quarter);
+        renderSignalDecay(sectorDecayData, 'icSectorDecayChart');
+
+        const indexResult = aggregateToSummary(dashboardData.backtest_data.index_ts, selectedQuarter);
+        buildICHeatmap(indexResult.data, 'icIndexChart', backtestMetricKey, indexResult.quarter, indexMcap, false);
+        const indexDecayData = recomputeDecay(dashboardData.backtest_data.index_ts, backtestMetricKey, indexResult.quarter);
+        renderSignalDecay(indexDecayData, 'icIndexDecayChart');
+    }
+
+    // Uncertainty chart
+    renderUncertaintyChart(currentScatterData, 'uncertaintyChart', metricKey);
+
+    // Stock table
+    allStockData = [...currentScatterData];
+    renderStockTable(metricKey);
+
+    // Note: Size premium chart is NOT re-rendered (mode-independent)
 }
 
 

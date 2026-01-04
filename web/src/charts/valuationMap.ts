@@ -129,13 +129,16 @@ export function renderValuationMap(
 
     const config = { responsive: true, displayModeBar: false };
 
-    // Use Plotly.newPlot to fully replace content including spinners
-    Plotly.newPlot(elementId, [trace], layout, config);
+    // Use Plotly.react for fast updates (reuses existing plot if present)
+    Plotly.react(elementId, [trace], layout, config);
 
-    // Add click handler
-    const plotEl = el as unknown as { on: (event: string, handler: (data: unknown) => void) => void; removeAllListeners?: (event: string) => void };
-    if (plotEl.on) {
-        plotEl.removeAllListeners?.('plotly_click');
+    // Add click handler only once (check if already attached)
+    const plotEl = el as unknown as {
+        on: (event: string, handler: (data: unknown) => void) => void;
+        _clickHandlerAttached?: boolean;
+    };
+    if (plotEl.on && !plotEl._clickHandlerAttached) {
+        plotEl._clickHandlerAttached = true;
         plotEl.on('plotly_click', (eventData: unknown) => {
             const data = eventData as { points: Array<{ customdata: [string, string, string, number] }> };
             const pt = data.points[0];

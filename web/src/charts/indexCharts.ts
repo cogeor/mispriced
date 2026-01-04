@@ -94,7 +94,7 @@ export function renderIndexChart(
         hoverlabel: { bgcolor: HOVER_BG, bordercolor: HOVER_BORDER, font: { color: '#f3f4f6' } }
     };
 
-    Plotly.newPlot(elementId, [trace], layout, { responsive: true, displayModeBar: false });
+    Plotly.react(elementId, [trace], layout, { responsive: true, displayModeBar: false });
 }
 
 // Color palette for distinct line colors
@@ -218,7 +218,7 @@ export function renderIndexTimeSeriesMulti(
         hoverlabel: { bgcolor: HOVER_BG, bordercolor: HOVER_BORDER, font: { color: '#f3f4f6' } }
     };
 
-    Plotly.newPlot(elementId, traces, layout, { responsive: true, displayModeBar: false });
+    Plotly.react(elementId, traces, layout, { responsive: true, displayModeBar: false });
 }
 
 // Sector colors - distinct from index colors
@@ -379,5 +379,5 @@ export function renderSectorTimeSeriesMulti(
         hoverlabel: { bgcolor: HOVER_BG, bordercolor: HOVER_BORDER, font: { color: '#f3f4f6' } }
     };
 
-    Plotly.newPlot(elementId, traces, layout, { responsive: true, displayModeBar: false });
+    Plotly.react(elementId, traces, layout, { responsive: true, displayModeBar: false });
 }
