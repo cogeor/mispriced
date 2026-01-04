@@ -154,10 +154,67 @@
             transform: none !important;
             /* Override -translate-y-1/2 */
         }
+
+        /* Loading spinner */
+        .chart-loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            min-height: 200px;
+        }
+
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid rgba(59, 130, 246, 0.2);
+            border-top-color: #3b82f6;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Initial loading overlay */
+        #loadingOverlay {
+            position: fixed;
+            inset: 0;
+            background: #0b0f19;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            transition: opacity 0.3s ease;
+        }
+
+        #loadingOverlay.fade-out {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        #loadingOverlay .spinner {
+            width: 48px;
+            height: 48px;
+        }
+
+        #loadingOverlay .loading-text {
+            margin-top: 16px;
+            color: #9ca3af;
+            font-size: 14px;
+        }
     </style>
 </head>
 
 <body class="min-h-screen p-4 md:px-12 md:pt-4 md:pb-8 selection:bg-blue-500 selection:text-white">
+
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay">
+        <div class="spinner"></div>
+        <div class="loading-text">Loading market data...</div>
+    </div>
 
     <!-- Sticky Quarter Select (70% of page = 30% from right) -->
     <div id="quarterSelectWrapper"

@@ -29,6 +29,19 @@ let stockPage: number = 0;
 const STOCKS_PER_PAGE = 100;
 let filteredStockData: ScatterPoint[] = [];
 
+// Loading helpers
+function hideLoadingOverlay(): void {
+    const overlay = document.getElementById('loadingOverlay');
+    if (overlay) {
+        overlay.classList.add('fade-out');
+        setTimeout(() => overlay.remove(), 300);
+    }
+}
+
+function nextFrame(): Promise<void> {
+    return new Promise(resolve => requestAnimationFrame(() => resolve()));
+}
+
 async function init(): Promise<void> {
     try {
         const response = await fetch('/dashboard_data.json');
@@ -37,10 +50,12 @@ async function init(): Promise<void> {
 
         if (dashboardData) {
             setupEventListeners();
+            hideLoadingOverlay();
             await renderDashboard();
         }
     } catch (e) {
         console.error(e);
+        hideLoadingOverlay();
         const app = document.getElementById('app');
         if (app) {
             app.innerHTML = `
@@ -125,15 +140,27 @@ function updateStats(): void {
 }
 
 /**
- * Synchronous rendering of all charts with current data.
+ * Progressive rendering of all charts with current data.
+ * Uses requestAnimationFrame to avoid blocking the main thread.
  * Called by updateCharts() after data fetch and by setMode() for fast switching.
  */
-function renderAllCharts(metricKey: MetricKey): void {
+async function renderAllCharts(metricKey: MetricKey, progressive: boolean = true): Promise<void> {
     if (!dashboardData) return;
 
-    renderValuationMap(currentScatterData, 'valuationChart', colorBy, metricKey);
-    renderSectorChart(currentScatterData, 'sectorChart', metricKey);
-    renderIndexChart(dashboardData.index_chart_data, currentScatterData, 'indexChart', metricKey);
+    // Helper to render with optional frame break
+    const render = async (fn: () => void) => {
+        if (progressive) await nextFrame();
+        fn();
+    };
+
+    // Main valuation map first (most important, above fold)
+    await render(() => renderValuationMap(currentScatterData, 'valuationChart', colorBy, metricKey));
+
+    // Sector and index charts (visible on scroll)
+    await render(() => {
+        renderSectorChart(currentScatterData, 'sectorChart', metricKey);
+        renderIndexChart(dashboardData!.index_chart_data, currentScatterData, 'indexChart', metricKey);
+    });
 
     // Initialize default enabled indices (highest mcap) if not set
     if (enabledIndices.size === 0 && dashboardData.index_timeseries.length > 0) {
@@ -149,9 +176,11 @@ function renderAllCharts(metricKey: MetricKey): void {
         }
     }
 
-    // Render time series charts with toggleable legend
-    renderIndexTimeSeriesMulti(dashboardData.index_timeseries, 'indexTimeSeriesChart', metricKey, enabledIndices);
-    renderSectorTimeSeriesMulti(dashboardData.sector_timeseries, 'sectorTimeSeriesChart', metricKey, enabledSectors);
+    // Time series charts
+    await render(() => {
+        renderIndexTimeSeriesMulti(dashboardData!.index_timeseries, 'indexTimeSeriesChart', metricKey, enabledIndices);
+        renderSectorTimeSeriesMulti(dashboardData!.sector_timeseries, 'sectorTimeSeriesChart', metricKey, enabledSectors);
+    });
 
     const backtestMetricKey = mispricingMode === 'sizeNeutral' ? 'residual' : 'raw';
 
@@ -171,38 +200,42 @@ function renderAllCharts(metricKey: MetricKey): void {
         indexMcap.set(d.index, d.count);
     });
 
-    // Sector signal quality
-    // Try selectedQuarter first, aggregateToSummary will fall back to best quarter if no data exists
-    const sectorResult = aggregateToSummary(dashboardData.backtest_data.sector_ts, selectedQuarter);
-    // Display which quarter was used (may differ from selectedQuarter if no data existed)
-    buildICHeatmap(sectorResult.data, 'icSectorChart', backtestMetricKey, sectorResult.quarter, sectorMcap, true);
-    const sectorDecayData = recomputeDecay(dashboardData.backtest_data.sector_ts, backtestMetricKey, sectorResult.quarter);
-    renderSignalDecay(sectorDecayData, 'icSectorDecayChart');
+    // Backtest charts (lower priority, below fold)
+    await render(() => {
+        const sectorResult = aggregateToSummary(dashboardData!.backtest_data.sector_ts, selectedQuarter);
+        buildICHeatmap(sectorResult.data, 'icSectorChart', backtestMetricKey, sectorResult.quarter, sectorMcap, true);
+        const sectorDecayData = recomputeDecay(dashboardData!.backtest_data.sector_ts, backtestMetricKey, sectorResult.quarter);
+        renderSignalDecay(sectorDecayData, 'icSectorDecayChart');
 
-    // Index signal quality
-    const indexResult = aggregateToSummary(dashboardData.backtest_data.index_ts, selectedQuarter);
-    buildICHeatmap(indexResult.data, 'icIndexChart', backtestMetricKey, indexResult.quarter, indexMcap, false);
-    const indexDecayData = recomputeDecay(dashboardData.backtest_data.index_ts, backtestMetricKey, indexResult.quarter);
-    renderSignalDecay(indexDecayData, 'icIndexDecayChart');
+        const indexResult = aggregateToSummary(dashboardData!.backtest_data.index_ts, selectedQuarter);
+        buildICHeatmap(indexResult.data, 'icIndexChart', backtestMetricKey, indexResult.quarter, indexMcap, false);
+        const indexDecayData = recomputeDecay(dashboardData!.backtest_data.index_ts, backtestMetricKey, indexResult.quarter);
+        renderSignalDecay(indexDecayData, 'icIndexDecayChart');
 
-    // Show note if backtest quarter differs from selected quarter
-    const backtestNote = document.getElementById('backtestQuarterNote');
-    if (backtestNote) {
-        const usedQuarter = sectorResult.quarter || indexResult.quarter;
-        if (selectedQuarter && usedQuarter && selectedQuarter !== usedQuarter) {
-            backtestNote.textContent = `⚠ Showing ${formatQuarter(usedQuarter)} data (${formatQuarter(selectedQuarter)} not yet available)`;
-            backtestNote.style.display = 'inline';
-        } else {
-            backtestNote.style.display = 'none';
+        // Show note if backtest quarter differs from selected quarter
+        const backtestNote = document.getElementById('backtestQuarterNote');
+        if (backtestNote) {
+            const usedQuarter = sectorResult.quarter || indexResult.quarter;
+            if (selectedQuarter && usedQuarter && selectedQuarter !== usedQuarter) {
+                backtestNote.textContent = `⚠ Showing ${formatQuarter(usedQuarter)} data (${formatQuarter(selectedQuarter)} not yet available)`;
+                backtestNote.style.display = 'inline';
+            } else {
+                backtestNote.style.display = 'none';
+            }
         }
-    }
+    });
 
-    renderUncertaintyChart(currentScatterData, 'uncertaintyChart', metricKey);
-    renderSizePremiumChart(dashboardData.size_coefficients, 'sizePremiumChart');
+    // Uncertainty and size premium charts
+    await render(() => {
+        renderUncertaintyChart(currentScatterData, 'uncertaintyChart', metricKey);
+        renderSizePremiumChart(dashboardData!.size_coefficients, 'sizePremiumChart');
+    });
 
-    // Stock table
-    allStockData = [...currentScatterData];
-    renderStockTable(metricKey);
+    // Stock table last (can be deferred)
+    await render(() => {
+        allStockData = [...currentScatterData];
+        renderStockTable(metricKey);
+    });
 }
 
 /**
@@ -228,7 +261,7 @@ async function updateCharts(): Promise<void> {
 
     // Render all charts with fetched data
     applySizeCorrection(currentScatterData);
-    renderAllCharts(metricKey);
+    await renderAllCharts(metricKey);
 }
 
 function applySizeCorrection(data: ScatterPoint[]): void {
@@ -667,9 +700,9 @@ function setMode(mode: MispricingMode): void {
 
     if (dashboardData) {
         updateStats();
-        // Use cached data for instant mode switching (no async fetch)
+        // Use cached data for instant mode switching (no progressive rendering)
         const metricKey: MetricKey = mode === 'sizeNeutral' ? 'residualMispricing' : 'mispricing';
-        renderAllCharts(metricKey);
+        renderAllCharts(metricKey, false);  // false = no progressive, instant switch
     }
 }
 
