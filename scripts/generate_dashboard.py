@@ -805,8 +805,48 @@ def build_and_save_dashboard_data(
     # Sector breakdown (for latest quarter)
     sector_breakdown = build_sector_breakdown(valuation_df)
 
-    # Construct final payload - NO valuation_by_quarter (loaded lazily)
-    payload = {
+    # Split data into multiple files for progressive loading
+    output_dir = "web/public"
+    os.makedirs(output_dir, exist_ok=True)
+
+    # 1. Core data (~35KB) - loads first, enables header + charts
+    core_payload = {
+        "generated_at": datetime.now().isoformat(),
+        "stats": stats,
+        "index_chart_data": index_chart_data,
+        "sector_breakdown": sector_breakdown,
+        "index_timeseries": index_timeseries,
+        "sector_timeseries": sector_timeseries,
+        "size_premium_curve": size_premium_curve,
+        "size_correction_model": size_correction_model,
+        "size_coefficients": size_coefficients,
+        "available_quarters": available_quarters or [],
+    }
+    core_path = os.path.join(output_dir, "core.json")
+    with open(core_path, "w", encoding="utf-8") as f:
+        json.dump(core_payload, f)
+    print(f"  Core data saved to {core_path} ({os.path.getsize(core_path) / 1024:.1f} KB)")
+
+    # 2. Scatter data (~1.1MB) - lazy loaded for valuation map
+    scatter_payload = {
+        "scatter_data": scatter_data,
+    }
+    scatter_path = os.path.join(output_dir, "scatter.json")
+    with open(scatter_path, "w", encoding="utf-8") as f:
+        json.dump(scatter_payload, f)
+    print(f"  Scatter data saved to {scatter_path} ({os.path.getsize(scatter_path) / 1024:.1f} KB)")
+
+    # 3. Backtest data (~250KB) - lazy loaded for IC heatmaps
+    backtest_payload = {
+        "backtest_data": backtest_data,
+    }
+    backtest_path = os.path.join(output_dir, "backtest.json")
+    with open(backtest_path, "w", encoding="utf-8") as f:
+        json.dump(backtest_payload, f)
+    print(f"  Backtest data saved to {backtest_path} ({os.path.getsize(backtest_path) / 1024:.1f} KB)")
+
+    # 4. Legacy combined file (for backwards compatibility, can be removed later)
+    legacy_payload = {
         "generated_at": datetime.now().isoformat(),
         "stats": stats,
         "scatter_data": scatter_data,
@@ -820,16 +860,10 @@ def build_and_save_dashboard_data(
         "size_coefficients": size_coefficients,
         "available_quarters": available_quarters or [],
     }
-
-    # Save to web/public/dashboard_data.json
-    output_dir = "web/public"
-    os.makedirs(output_dir, exist_ok=True)
-    output_path = os.path.join(output_dir, "dashboard_data.json")
-
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
-
-    print(f"Dashboard data saved to {output_path}")
+    legacy_path = os.path.join(output_dir, "dashboard_data.json")
+    with open(legacy_path, "w", encoding="utf-8") as f:
+        json.dump(legacy_payload, f)
+    print(f"  Legacy combined file saved to {legacy_path}")
 
 
 def save_quarter_data(quarter_str: str, quarter_df: pd.DataFrame) -> None:

@@ -138,6 +138,28 @@ export interface DashboardData {
     size_correction_model?: SizeCorrectionModel; // Quadratic model coefficients
 }
 
+// Split data types for progressive loading
+export interface CoreData {
+    generated_at: string;
+    stats: DashboardStats;
+    index_chart_data: IndexChartItem[];
+    sector_breakdown: SectorBreakdownItem[];
+    index_timeseries: IndexTimeSeriesPoint[];
+    sector_timeseries: SectorTimeSeriesPoint[];
+    size_premium_curve: SizePremiumPoint[];
+    size_coefficients: SizeCoefficient[];
+    available_quarters: string[];
+    size_correction_model?: SizeCorrectionModel;
+}
+
+export interface ScatterData {
+    scatter_data: ScatterPoint[];
+}
+
+export interface BacktestPayload {
+    backtest_data: BacktestData;
+}
+
 export type MispricingMode = 'raw' | 'sizeNeutral';
 export type ColorMode = 'sector' | 'mispricing';
 export type MetricKey = 'mispricing' | 'residualMispricing';
