@@ -28,24 +28,27 @@ export function renderIndexChart(
     // This gives the true market-wide aggregate
     const validStocks = scatterData.filter(d => d.actual > 0);
     const totalMcap = validStocks.reduce((sum, d) => sum + d.actual, 0);
-    const globalMispricing = validStocks.reduce((sum, d) => sum + (d[metricKey] || 0) * d.actual, 0) / totalMcap;
-    const globalCount = validStocks.length;
 
-    // Add Global to the data
-    const globalItem: IndexChartItem = {
-        index: 'Global',
-        mispricing: metricKey === 'mispricing' ? globalMispricing : 0,
-        residualMispricing: metricKey === 'residualMispricing' ? globalMispricing : 0,
-        mispricingPct: (globalMispricing * 100).toFixed(1) + '%',
-        residualMispricingPct: (globalMispricing * 100).toFixed(1) + '%',
-        color: globalMispricing > 0 ? '#ef4444' : '#10b981',
-        status: 'aggregate',
-        totalActual: '',
-        totalPredicted: '',
-        count: globalCount,
-        officialCount: globalCount
-    };
-    const chartData: IndexChartItem[] = [...validData, globalItem];
+    // Only add Global if we have scatter data
+    let chartData: IndexChartItem[] = [...validData];
+    if (totalMcap > 0) {
+        const globalMispricing = validStocks.reduce((sum, d) => sum + (d[metricKey] || 0) * d.actual, 0) / totalMcap;
+        const globalCount = validStocks.length;
+        const globalItem: IndexChartItem = {
+            index: 'Global',
+            mispricing: metricKey === 'mispricing' ? globalMispricing : 0,
+            residualMispricing: metricKey === 'residualMispricing' ? globalMispricing : 0,
+            mispricingPct: (globalMispricing * 100).toFixed(1) + '%',
+            residualMispricingPct: (globalMispricing * 100).toFixed(1) + '%',
+            color: globalMispricing > 0 ? '#ef4444' : '#10b981',
+            status: 'aggregate',
+            totalActual: '',
+            totalPredicted: '',
+            count: globalCount,
+            officialCount: globalCount
+        };
+        chartData = [...validData, globalItem];
+    }
 
     // Negate mispricing so positive = overvalued, then sort highest to lowest
     chartData.sort((a, b) => (-b[metricKey]) - (-a[metricKey]));
@@ -91,7 +94,7 @@ export function renderIndexChart(
         hoverlabel: { bgcolor: HOVER_BG, bordercolor: HOVER_BORDER, font: { color: '#f3f4f6' } }
     };
 
-    Plotly.react(elementId, [trace], layout, { responsive: true, displayModeBar: false });
+    Plotly.newPlot(elementId, [trace], layout, { responsive: true, displayModeBar: false });
 }
 
 // Color palette for distinct line colors
@@ -215,7 +218,7 @@ export function renderIndexTimeSeriesMulti(
         hoverlabel: { bgcolor: HOVER_BG, bordercolor: HOVER_BORDER, font: { color: '#f3f4f6' } }
     };
 
-    Plotly.react(elementId, traces, layout, { responsive: true, displayModeBar: false });
+    Plotly.newPlot(elementId, traces, layout, { responsive: true, displayModeBar: false });
 }
 
 // Sector colors - distinct from index colors
@@ -376,5 +379,5 @@ export function renderSectorTimeSeriesMulti(
         hoverlabel: { bgcolor: HOVER_BG, bordercolor: HOVER_BORDER, font: { color: '#f3f4f6' } }
     };
 
-    Plotly.react(elementId, traces, layout, { responsive: true, displayModeBar: false });
+    Plotly.newPlot(elementId, traces, layout, { responsive: true, displayModeBar: false });
 }

@@ -177,51 +177,22 @@
             to { transform: rotate(360deg); }
         }
 
-        /* Initial loading overlay */
-        #loadingOverlay {
-            position: fixed;
-            inset: 0;
-            background: #0b0f19;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            z-index: 100;
-            transition: opacity 0.3s ease;
-        }
-
-        #loadingOverlay.fade-out {
-            opacity: 0;
-            pointer-events: none;
-        }
-
-        #loadingOverlay .spinner {
-            width: 48px;
-            height: 48px;
-        }
-
-        #loadingOverlay .loading-text {
-            margin-top: 16px;
-            color: #9ca3af;
-            font-size: 14px;
+        /* Quarter select dropdown styling */
+        #quarterSelect option {
+            background-color: #111827;
+            color: #d1d5db;
         }
     </style>
 </head>
 
 <body class="min-h-screen p-4 md:px-12 md:pt-4 md:pb-8 selection:bg-blue-500 selection:text-white">
 
-    <!-- Loading Overlay -->
-    <div id="loadingOverlay">
-        <div class="spinner"></div>
-        <div class="loading-text">Loading market data...</div>
-    </div>
-
     <!-- Sticky Quarter Select (70% of page = 30% from right) -->
     <div id="quarterSelectWrapper"
         class="fixed z-50 bg-gray-900/95 rounded-xl border border-gray-700 shadow-lg backdrop-blur-sm"
         style="top: 24px; right: 30%; padding: 8px;">
         <select id="quarterSelect"
-            class="bg-transparent text-gray-300 text-sm rounded-lg border border-gray-700 px-4 py-2 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+            class="bg-gray-900 text-gray-300 text-sm rounded-lg border border-gray-700 px-4 py-2 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
             style="font-size: 15px;">
             <option value="">Loading...</option>
         </select>

@@ -146,7 +146,7 @@ export function buildICHeatmap(
         annotations: annotations
     };
 
-    Plotly.react(elementId, [trace], layout, { responsive: true, displayModeBar: false });
+    Plotly.newPlot(elementId, [trace], layout, { responsive: true, displayModeBar: false });
 }
 
 export interface HorizonDecayItem {
@@ -158,7 +158,11 @@ export interface HorizonDecayItem {
 export function renderSignalDecay(horizonData: HorizonDecayItem[], elementId: string): void {
     const el = document.getElementById(elementId);
     if (!el) return;
-    if (!horizonData || horizonData.length === 0) return;
+
+    if (!horizonData || horizonData.length === 0) {
+        el.innerHTML = '<div class="flex items-center justify-center h-full text-gray-500">No Data</div>';
+        return;
+    }
 
     const sorted = [...horizonData].sort((a, b) => a.horizon - b.horizon);
     const x = sorted.map(d => d.horizon);
@@ -192,5 +196,5 @@ export function renderSignalDecay(horizonData: HorizonDecayItem[], elementId: st
         hoverlabel: { bgcolor: HOVER_BG, bordercolor: HOVER_BORDER, font: { color: '#f3f4f6' } }
     };
 
-    Plotly.react(elementId, [trace], layout, { responsive: true, displayModeBar: false });
+    Plotly.newPlot(elementId, [trace], layout, { responsive: true, displayModeBar: false });
 }

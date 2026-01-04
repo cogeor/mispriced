@@ -21,6 +21,7 @@ export function renderValuationMap(
     const el = document.getElementById(elementId);
     if (!el) return;
 
+
     const isResidual = metricKey === 'residualMispricing';
     // Helper to get displayed predicted value based on mode
     const getPredicted = (d: ScatterPoint): number =>
@@ -128,9 +129,8 @@ export function renderValuationMap(
 
     const config = { responsive: true, displayModeBar: false };
 
-    // Use Plotly.react for efficient updates (preserves layout, only updates data)
-    // This is faster than newPlot for mode switching since layout doesn't change
-    Plotly.react(elementId, [trace], layout, config);
+    // Use Plotly.newPlot to fully replace content including spinners
+    Plotly.newPlot(elementId, [trace], layout, config);
 
     // Add click handler
     const plotEl = el as unknown as { on: (event: string, handler: (data: unknown) => void) => void; removeAllListeners?: (event: string) => void };

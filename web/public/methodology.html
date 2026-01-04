@@ -156,10 +156,10 @@
                 <div class="bg-gray-800/50 rounded-lg p-4">
                     <h3 class="font-semibold text-gray-200 mb-2">Key Insight</h3>
                     <p class="text-sm">
-                        Mispricing signals are <strong>relative</strong>, not absolute. A stock showing -20% mispricing
-                        means the model predicts a lower fair value than the current market cap based on fundamentals alone.
-                        This could indicate overvaluation, but could also reflect growth expectations, brand value, or other
-                        intangibles not captured by financial statements.
+                        Mispricing signals are <strong>relative</strong>, not absolute. A stock showing 20% mispricing
+                        means the current market cap exceeds the model's predicted fair value by 20% based on fundamentals alone.
+                        This indicates <strong>overvaluation</strong> — investors are willing to pay beyond what fundamentals suggest,
+                        which could reflect growth expectations, brand value, or other intangibles not captured by financial statements.
                     </p>
                 </div>
 
@@ -212,7 +212,7 @@ max_depth: 5<br>
 learning_rate: 0.1<br>
 subsample: 0.8<br>
 colsample_bytree: 0.8<br>
-objective: reg:squarederror
+objective: reg:absoluteerror
                     </code>
                 </div>
                 <p class="text-sm text-gray-500 mt-2">Fixed parameters ensure consistency across quarters. No hyperparameter tuning is performed.</p>
@@ -397,13 +397,21 @@ objective: reg:squarederror
                     </table>
                 </div>
 
-                <div class="bg-amber-900/20 border border-amber-700/30 rounded-lg p-4 mt-4">
-                    <h4 class="font-semibold text-amber-300 mb-2">Current Data Limitation</h4>
-                    <p class="text-sm">
-                        Due to data ingestion constraints, only <strong>~90% of stocks have revenue data</strong>.
-                        Other financial statement items (profit, debt, cash, FCF) have less than 1% availability.
-                        The model currently operates primarily on revenue as the main feature.
+                <div class="bg-blue-900/20 border border-blue-700/30 rounded-lg p-4 mt-4">
+                    <h4 class="font-semibold text-blue-300 mb-2">Current Data Coverage</h4>
+                    <p class="text-sm mb-2">
+                        Feature availability across ~32,000 quarterly snapshots:
                     </p>
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                        <div><strong class="text-gray-300">Revenue:</strong> 91%</div>
+                        <div><strong class="text-gray-300">Net Income:</strong> 72%</div>
+                        <div><strong class="text-gray-300">Total Debt:</strong> 72%</div>
+                        <div><strong class="text-gray-300">Total Cash:</strong> 72%</div>
+                        <div><strong class="text-gray-300">EBITDA:</strong> 64%</div>
+                        <div><strong class="text-gray-300">Free Cash Flow:</strong> 69%</div>
+                        <div><strong class="text-gray-300">ROA/ROE:</strong> 65-71%</div>
+                        <div><strong class="text-gray-300">Gross Profit:</strong> 43%</div>
+                    </div>
                 </div>
 
                 <h3 class="font-semibold text-gray-200 mt-4">Transforms Explained</h3>
@@ -424,23 +432,23 @@ objective: reg:squarederror
                 <h3 class="font-semibold text-gray-200">Raw Mispricing</h3>
                 <div class="formula text-center">
                     <code class="text-lg">
-                        mispricing = (predicted_mcap - actual_mcap) / actual_mcap
+                        mispricing = (actual_mcap - predicted_mcap) / actual_mcap
                     </code>
                 </div>
 
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                    <div class="bg-green-900/20 border border-green-700/30 rounded-lg p-4">
-                        <h4 class="font-semibold text-green-300 mb-2">Positive Mispricing</h4>
+                    <div class="bg-red-900/20 border border-red-700/30 rounded-lg p-4">
+                        <h4 class="font-semibold text-red-300 mb-2">Positive Mispricing</h4>
                         <p class="text-sm">
-                            Model predicts <strong>higher</strong> fair value than current market cap.
-                            Suggests potential <strong>undervaluation</strong> based on fundamentals.
+                            Current market cap <strong>exceeds</strong> model's predicted fair value.
+                            Suggests potential <strong>overvaluation</strong> — investors are paying beyond fundamentals.
                         </p>
                     </div>
-                    <div class="bg-red-900/20 border border-red-700/30 rounded-lg p-4">
-                        <h4 class="font-semibold text-red-300 mb-2">Negative Mispricing</h4>
+                    <div class="bg-green-900/20 border border-green-700/30 rounded-lg p-4">
+                        <h4 class="font-semibold text-green-300 mb-2">Negative Mispricing</h4>
                         <p class="text-sm">
-                            Model predicts <strong>lower</strong> fair value than current market cap.
-                            Suggests potential <strong>overvaluation</strong> based on fundamentals.
+                            Current market cap is <strong>below</strong> model's predicted fair value.
+                            Suggests potential <strong>undervaluation</strong> based on fundamentals.
                         </p>
                     </div>
                 </div>
@@ -504,13 +512,13 @@ objective: reg:squarederror
                 <div class="bg-gray-800/50 rounded-lg p-4 mt-3">
                     <h4 class="font-semibold text-gray-200 mb-2">Interpreting IC</h4>
                     <ul class="text-sm space-y-1 text-gray-400">
-                        <li><strong class="text-green-400">IC &gt; 0:</strong> Positive mispricing (undervalued) stocks outperformed</li>
+                        <li><strong class="text-green-400">IC &gt; 0:</strong> Signal worked — overvalued stocks underperformed, undervalued outperformed</li>
                         <li><strong class="text-gray-400">IC ~ 0:</strong> No predictive signal</li>
-                        <li><strong class="text-red-400">IC &lt; 0:</strong> Negative mispricing (overvalued) stocks outperformed</li>
+                        <li><strong class="text-red-400">IC &lt; 0:</strong> Signal inverted — overvalued stocks outperformed (momentum dominated)</li>
                     </ul>
                     <p class="text-sm text-gray-500 mt-2">
-                        Note: On the dashboard, IC is displayed such that <strong>positive = good signal</strong>
-                        (overvalued stocks went down, undervalued went up).
+                        On the dashboard, IC is displayed such that <strong>positive = good signal</strong>
+                        (mispricing predicted subsequent returns correctly).
                     </p>
                 </div>
 
@@ -595,8 +603,9 @@ objective: reg:squarederror
                 <h3 class="font-semibold text-gray-200 mt-4">Data Limitations</h3>
                 <ul class="text-sm space-y-2 list-disc list-inside text-gray-400">
                     <li>
-                        <strong class="text-gray-300">Incomplete financials:</strong>
-                        Currently only ~90% of stocks have revenue data. Other fundamentals have &lt;1% coverage.
+                        <strong class="text-gray-300">Variable coverage:</strong>
+                        Revenue has ~91% coverage, but some features like gross profit have lower availability (~43%).
+                        Missing values are filled with sector medians or zeros.
                     </li>
                     <li>
                         <strong class="text-gray-300">Point-in-time accuracy:</strong>

@@ -37,8 +37,7 @@ let filteredStockData: ScatterPoint[] = [];
 function hideLoadingOverlay(): void {
     const overlay = document.getElementById('loadingOverlay');
     if (overlay) {
-        overlay.classList.add('fade-out');
-        setTimeout(() => overlay.remove(), 300);
+        overlay.remove(); // Remove immediately, no animation
     }
 }
 
@@ -46,47 +45,34 @@ function nextFrame(): Promise<void> {
     return new Promise(resolve => requestAnimationFrame(() => resolve()));
 }
 
-function showChartSpinner(chartId: string): void {
-    const el = document.getElementById(chartId);
-    if (el) {
-        el.innerHTML = '<div class="chart-loading"><div class="spinner"></div></div>';
-    }
-}
-
 function clearChartSpinner(chartId: string, message: string = ''): void {
     const el = document.getElementById(chartId);
     if (el) {
-        el.innerHTML = message ? `<div class="chart-loading" style="color: #6b7280; font-size: 14px;">${message}</div>` : '';
+        el.innerHTML = message ? `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#6b7280;font-size:14px;">${message}</div>` : '';
     }
 }
 
-function updateLoadingText(text: string): void {
-    const el = document.querySelector('#loadingOverlay .loading-text');
-    if (el) el.textContent = text;
-}
-
 async function init(): Promise<void> {
+    // Initialize empty dashboard data structure
+    dashboardData = {
+        generated_at: '',
+        stats: {} as DashboardData['stats'],
+        scatter_data: [],
+        index_chart_data: [],
+        sector_breakdown: [],
+        backtest_data: { sector_ts: [], index_ts: [], sector_summary: [], index_summary: [], horizon: [] },
+        index_timeseries: [],
+        sector_timeseries: [],
+        size_premium_curve: [],
+        size_coefficients: [],
+        available_quarters: [],
+    };
+
+    // Setup event listeners early
+    setupEventListeners();
+
     try {
-        // Initialize empty dashboard data structure
-        dashboardData = {
-            generated_at: '',
-            stats: {} as DashboardData['stats'],
-            scatter_data: [],
-            index_chart_data: [],
-            sector_breakdown: [],
-            backtest_data: { sector_ts: [], index_ts: [], sector_summary: [], index_summary: [], horizon: [] },
-            index_timeseries: [],
-            sector_timeseries: [],
-            size_premium_curve: [],
-            size_coefficients: [],
-            available_quarters: [],
-        };
-
-        // Setup event listeners early
-        setupEventListeners();
-
         // PHASE 1: Load core data (~35KB) - fast, enables header + basic charts
-        updateLoadingText('Loading core data...');
         const coreResponse = await fetch('/core.json');
         if (!coreResponse.ok) throw new Error(`HTTP ${coreResponse.status} loading core data`);
         const coreData: CoreData = await coreResponse.json();
@@ -110,54 +96,22 @@ async function init(): Promise<void> {
         updateStats();
         await renderCoreCharts();
 
-        // PHASE 2: Load scatter data (~1.1MB) in background
-        showChartSpinner('valuationChart');
-        showChartSpinner('sectorChart');
-        showChartSpinner('uncertaintyChart');
-        const scatterPromise = fetch('/scatter.json')
-            .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
-            .then(async (data: ScatterData) => {
-                dashboardData!.scatter_data = data.scatter_data;
-                scatterDataLoaded = true;
-                currentScatterData = data.scatter_data;
-                applySizeCorrection(currentScatterData);
-                await renderScatterCharts();
-            })
-            .catch(e => {
-                console.error('Failed to load scatter data:', e);
-                // Clear spinners on error
-                clearChartSpinner('valuationChart', 'Failed to load');
-                clearChartSpinner('sectorChart', 'Failed to load');
-                clearChartSpinner('uncertaintyChart', 'Failed to load');
-            });
+        // PHASE 2 & 3: Load scatter and backtest data in parallel
+        const [scatterResult, backtestResult] = await Promise.allSettled([
+            loadScatterData(),
+            loadBacktestData()
+        ]);
 
-        // PHASE 3: Load backtest data (~250KB) in background
-        showChartSpinner('icSectorChart');
-        showChartSpinner('icIndexChart');
-        showChartSpinner('icSectorDecayChart');
-        showChartSpinner('icIndexDecayChart');
-        const backtestPromise = fetch('/backtest.json')
-            .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
-            .then(async (data: BacktestPayload) => {
-                dashboardData!.backtest_data = data.backtest_data;
-                backtestDataLoaded = true;
-                await renderBacktestCharts();
-            })
-            .catch(e => {
-                console.error('Failed to load backtest data:', e);
-                // Clear spinners on error
-                clearChartSpinner('icSectorChart', 'Failed to load');
-                clearChartSpinner('icIndexChart', 'Failed to load');
-                clearChartSpinner('icSectorDecayChart', 'Failed to load');
-                clearChartSpinner('icIndexDecayChart', 'Failed to load');
-            });
-
-        // Wait for all data to load
-        await Promise.all([scatterPromise, backtestPromise]);
+        // Log any errors
+        if (scatterResult.status === 'rejected') {
+            console.error('Scatter data failed:', scatterResult.reason);
+        }
+        if (backtestResult.status === 'rejected') {
+            console.error('Backtest data failed:', backtestResult.reason);
+        }
 
     } catch (e) {
-        console.error(e);
-        hideLoadingOverlay();
+        console.error('Init error:', e);
         const app = document.getElementById('app');
         if (app) {
             app.innerHTML = `
@@ -169,7 +123,30 @@ async function init(): Promise<void> {
                     </div>
                 </div>`;
         }
+    } finally {
+        // Always ensure loading overlay is gone
+        hideLoadingOverlay();
     }
+}
+
+async function loadScatterData(): Promise<void> {
+    const r = await fetch('/scatter.json');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data: ScatterData = await r.json();
+    dashboardData!.scatter_data = data.scatter_data;
+    scatterDataLoaded = true;
+    currentScatterData = data.scatter_data;
+    applySizeCorrection(currentScatterData);
+    await renderScatterCharts();
+}
+
+async function loadBacktestData(): Promise<void> {
+    const r = await fetch('/backtest.json');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data: BacktestPayload = await r.json();
+    dashboardData!.backtest_data = data.backtest_data;
+    backtestDataLoaded = true;
+    await renderBacktestCharts();
 }
 
 async function renderCoreCharts(): Promise<void> {
@@ -211,6 +188,14 @@ async function renderScatterCharts(): Promise<void> {
     // Update stats now that scatter data is loaded
     updateStats();
 
+    // Guard against empty data
+    if (currentScatterData.length === 0) {
+        clearChartSpinner('valuationChart', 'No data');
+        clearChartSpinner('sectorChart', 'No data');
+        clearChartSpinner('uncertaintyChart', 'No data');
+        return;
+    }
+
     await nextFrame();
     renderValuationMap(currentScatterData, 'valuationChart', colorBy, metricKey);
 
@@ -228,7 +213,9 @@ async function renderScatterCharts(): Promise<void> {
 }
 
 async function renderBacktestCharts(): Promise<void> {
-    if (!dashboardData || !backtestDataLoaded) return;
+    if (!dashboardData || !backtestDataLoaded) {
+        return;
+    }
     const backtestMetricKey = mispricingMode === 'sizeNeutral' ? 'residual' : 'raw';
 
     // Compute sector mcap for ordering
@@ -247,22 +234,39 @@ async function renderBacktestCharts(): Promise<void> {
         indexMcap.set(d.index, d.count);
     });
 
-    await nextFrame();
-    const sectorResult = aggregateToSummary(dashboardData.backtest_data.sector_ts, selectedQuarter);
-    buildICHeatmap(sectorResult.data, 'icSectorChart', backtestMetricKey, sectorResult.quarter, sectorMcap, true);
-    const sectorDecayData = recomputeDecay(dashboardData.backtest_data.sector_ts, backtestMetricKey, sectorResult.quarter);
-    renderSignalDecay(sectorDecayData, 'icSectorDecayChart');
+    let sectorResultQuarter: string | null = null;
+    let indexResultQuarter: string | null = null;
 
     await nextFrame();
-    const indexResult = aggregateToSummary(dashboardData.backtest_data.index_ts, selectedQuarter);
-    buildICHeatmap(indexResult.data, 'icIndexChart', backtestMetricKey, indexResult.quarter, indexMcap, false);
-    const indexDecayData = recomputeDecay(dashboardData.backtest_data.index_ts, backtestMetricKey, indexResult.quarter);
-    renderSignalDecay(indexDecayData, 'icIndexDecayChart');
+    try {
+        const sectorResult = aggregateToSummary(dashboardData.backtest_data.sector_ts, selectedQuarter);
+        sectorResultQuarter = sectorResult.quarter;
+        buildICHeatmap(sectorResult.data, 'icSectorChart', backtestMetricKey, sectorResult.quarter, sectorMcap, true);
+        const sectorDecayData = recomputeDecay(dashboardData.backtest_data.sector_ts, backtestMetricKey, sectorResult.quarter);
+        renderSignalDecay(sectorDecayData, 'icSectorDecayChart');
+    } catch (e) {
+        console.error('Failed to render sector backtest charts:', e);
+        clearChartSpinner('icSectorChart', 'Error');
+        clearChartSpinner('icSectorDecayChart', 'Error');
+    }
+
+    await nextFrame();
+    try {
+        const indexResult = aggregateToSummary(dashboardData.backtest_data.index_ts, selectedQuarter);
+        indexResultQuarter = indexResult.quarter;
+        buildICHeatmap(indexResult.data, 'icIndexChart', backtestMetricKey, indexResult.quarter, indexMcap, false);
+        const indexDecayData = recomputeDecay(dashboardData.backtest_data.index_ts, backtestMetricKey, indexResult.quarter);
+        renderSignalDecay(indexDecayData, 'icIndexDecayChart');
+    } catch (e) {
+        console.error('Failed to render index backtest charts:', e);
+        clearChartSpinner('icIndexChart', 'Error');
+        clearChartSpinner('icIndexDecayChart', 'Error');
+    }
 
     // Show note if backtest quarter differs from selected quarter
     const backtestNote = document.getElementById('backtestQuarterNote');
     if (backtestNote) {
-        const usedQuarter = sectorResult.quarter || indexResult.quarter;
+        const usedQuarter = sectorResultQuarter || indexResultQuarter;
         if (selectedQuarter && usedQuarter && selectedQuarter !== usedQuarter) {
             backtestNote.textContent = `⚠ Showing ${formatQuarter(usedQuarter)} data (${formatQuarter(selectedQuarter)} not yet available)`;
             backtestNote.style.display = 'inline';
@@ -456,7 +460,6 @@ async function updateCharts(): Promise<void> {
 
     // If a non-latest quarter is selected, fetch its data lazily
     if (selectedQuarter && selectedQuarter !== latestQuarter) {
-        showChartSpinner('valuationChart');
         const quarterData = await fetchQuarterData(selectedQuarter);
         if (quarterData) {
             currentScatterData = quarterData.scatter_data;
@@ -468,7 +471,15 @@ async function updateCharts(): Promise<void> {
 
     // Use progressive rendering
     await renderScatterCharts();
-    await renderCoreCharts();
+    // Note: Don't call renderCoreCharts() here - it would overwrite index chart without scatter data
+    // renderScatterCharts already re-renders index chart with scatter data for Global aggregate
+    // Only render time series and other core charts that don't need scatter data
+    const metricKey: MetricKey = mispricingMode === 'sizeNeutral' ? 'residualMispricing' : 'mispricing';
+    await nextFrame();
+    renderIndexTimeSeriesMulti(dashboardData.index_timeseries, 'indexTimeSeriesChart', metricKey, enabledIndices);
+    renderSectorTimeSeriesMulti(dashboardData.sector_timeseries, 'sectorTimeSeriesChart', metricKey, enabledSectors);
+    renderSizePremiumChart(dashboardData.size_coefficients, 'sizePremiumChart');
+
     if (backtestDataLoaded) await renderBacktestCharts();
 }
 

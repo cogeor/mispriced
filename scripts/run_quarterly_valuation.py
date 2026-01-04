@@ -50,6 +50,10 @@ MIN_SAMPLES_FOR_CV = 50
 N_CV_REPEATS = 10
 N_CV_FOLDS = 5
 
+# Critical features - stocks missing ALL of these are excluded
+# At least one financial metric is needed for a meaningful prediction
+CRITICAL_FEATURES = ["total_revenue", "net_income", "ebitda"]
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -153,9 +157,29 @@ def load_quarter_data(
         df["market_cap_t0"] = pd.to_numeric(df["market_cap_t0"], errors="coerce")
         df = df[df["market_cap_t0"] >= MIN_MARKET_CAP].copy()
 
+    mcap_filtered_count = len(df)
+
+    # Filter out stocks missing ALL critical features
+    # These would get median-filled and produce meaningless predictions
+    if len(df) > 0:
+        # Convert critical feature columns to numeric
+        for col in CRITICAL_FEATURES:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        # Check which stocks have at least one non-null critical feature
+        critical_cols = [c for c in CRITICAL_FEATURES if c in df.columns]
+        if critical_cols:
+            has_any_critical = df[critical_cols].notna().any(axis=1)
+            excluded_count = (~has_any_critical).sum()
+            if excluded_count > 0:
+                excluded_tickers = df[~has_any_critical]["ticker"].tolist()
+                logger.info(f"  Excluding {excluded_count} tickers missing ALL critical features: {excluded_tickers[:5]}...")
+            df = df[has_any_critical].copy()
+
     logger.info(
-        f"  Loaded {len(df)} valid tickers (filtered from {original_count}, "
-        f"mcap >= ${MIN_MARKET_CAP/1e6:.0f}M)"
+        f"  Loaded {len(df)} valid tickers (from {original_count} raw, "
+        f"{mcap_filtered_count} after mcap filter, mcap >= ${MIN_MARKET_CAP/1e6:.0f}M)"
     )
 
     return df
