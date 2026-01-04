@@ -53,6 +53,13 @@ function showChartSpinner(chartId: string): void {
     }
 }
 
+function clearChartSpinner(chartId: string, message: string = ''): void {
+    const el = document.getElementById(chartId);
+    if (el) {
+        el.innerHTML = message ? `<div class="chart-loading" style="color: #6b7280; font-size: 14px;">${message}</div>` : '';
+    }
+}
+
 function updateLoadingText(text: string): void {
     const el = document.querySelector('#loadingOverlay .loading-text');
     if (el) el.textContent = text;
@@ -105,6 +112,8 @@ async function init(): Promise<void> {
 
         // PHASE 2: Load scatter data (~1.1MB) in background
         showChartSpinner('valuationChart');
+        showChartSpinner('sectorChart');
+        showChartSpinner('uncertaintyChart');
         const scatterPromise = fetch('/scatter.json')
             .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
             .then(async (data: ScatterData) => {
@@ -114,11 +123,19 @@ async function init(): Promise<void> {
                 applySizeCorrection(currentScatterData);
                 await renderScatterCharts();
             })
-            .catch(e => console.error('Failed to load scatter data:', e));
+            .catch(e => {
+                console.error('Failed to load scatter data:', e);
+                // Clear spinners on error
+                clearChartSpinner('valuationChart', 'Failed to load');
+                clearChartSpinner('sectorChart', 'Failed to load');
+                clearChartSpinner('uncertaintyChart', 'Failed to load');
+            });
 
         // PHASE 3: Load backtest data (~250KB) in background
         showChartSpinner('icSectorChart');
         showChartSpinner('icIndexChart');
+        showChartSpinner('icSectorDecayChart');
+        showChartSpinner('icIndexDecayChart');
         const backtestPromise = fetch('/backtest.json')
             .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
             .then(async (data: BacktestPayload) => {
@@ -126,7 +143,14 @@ async function init(): Promise<void> {
                 backtestDataLoaded = true;
                 await renderBacktestCharts();
             })
-            .catch(e => console.error('Failed to load backtest data:', e));
+            .catch(e => {
+                console.error('Failed to load backtest data:', e);
+                // Clear spinners on error
+                clearChartSpinner('icSectorChart', 'Failed to load');
+                clearChartSpinner('icIndexChart', 'Failed to load');
+                clearChartSpinner('icSectorDecayChart', 'Failed to load');
+                clearChartSpinner('icIndexDecayChart', 'Failed to load');
+            });
 
         // Wait for all data to load
         await Promise.all([scatterPromise, backtestPromise]);
@@ -183,6 +207,9 @@ async function renderCoreCharts(): Promise<void> {
 async function renderScatterCharts(): Promise<void> {
     if (!dashboardData || !scatterDataLoaded) return;
     const metricKey: MetricKey = mispricingMode === 'sizeNeutral' ? 'residualMispricing' : 'mispricing';
+
+    // Update stats now that scatter data is loaded
+    updateStats();
 
     await nextFrame();
     renderValuationMap(currentScatterData, 'valuationChart', colorBy, metricKey);
@@ -262,6 +289,16 @@ function updateStats(): void {
 
     // Use currentScatterData for dynamic stats (updates when quarter changes)
     const scatterData = currentScatterData.length > 0 ? currentScatterData : dashboardData.scatter_data;
+
+    // If no scatter data yet, show loading state
+    if (scatterData.length === 0) {
+        setText('totalTickers', '...');
+        setText('totalMcap', '...');
+        setText('sectorsTracked', '...');
+        setText('medianMispricing', '...');
+        setText('avgMispricing', '...');
+        return;
+    }
 
     // Compute stats from filtered data (not static stats)
     setText('totalTickers', scatterData.length.toLocaleString());
