@@ -108,8 +108,11 @@
 
         <!-- Header -->
         <header class="mb-8">
-            <h1 class="font-extrabold tracking-tight text-white text-3xl mb-2">Model Methodology</h1>
-            <p class="text-gray-400">Technical documentation for the Mispriced valuation model</p>
+            <div class="flex items-baseline gap-3 mb-2">
+                <h1 class="font-extrabold tracking-tight text-white text-3xl">Mispriced</h1>
+                <span class="text-gray-400 font-medium">fundamental valuation software</span>
+            </div>
+            <p class="text-gray-500 text-lg">Model Methodology</p>
         </header>
 
         <!-- Table of Contents -->
@@ -159,6 +162,19 @@
                         intangibles not captured by financial statements.
                     </p>
                 </div>
+
+                <div class="bg-purple-900/20 border border-purple-700/30 rounded-lg p-4">
+                    <h3 class="font-semibold text-purple-300 mb-2">Cross-Sectional, Not Time-Series</h3>
+                    <p class="text-sm">
+                        Each quarter is trained <strong>independently</strong> — the model only compares companies within the same quarter.
+                        This means:
+                    </p>
+                    <ul class="text-sm space-y-1 list-disc list-inside mt-2">
+                        <li><strong class="text-gray-300">No future leakage:</strong> The model cannot learn from future quarters</li>
+                        <li><strong class="text-gray-300">Market regime adaptation:</strong> Valuation multiples change over time (e.g., tech was valued higher in 2021)</li>
+                        <li><strong class="text-gray-300">Fair comparison:</strong> Companies are valued against contemporaries, not historical norms</li>
+                    </ul>
+                </div>
             </div>
         </section>
 
@@ -188,17 +204,18 @@
                     <li><strong class="text-gray-300">No scaling required:</strong> Tree splits are invariant to monotonic feature transformations</li>
                 </ul>
 
-                <h3 class="font-semibold text-gray-200 mt-4">Hyperparameter Grid</h3>
+                <h3 class="font-semibold text-gray-200 mt-4">Fixed Hyperparameters</h3>
                 <div class="formula text-sm">
                     <code>
-n_estimators: [100, 300]<br>
-max_depth: [3, 5, 7]<br>
-learning_rate: [0.05, 0.1, 0.2]<br>
-subsample: [0.8]<br>
+n_estimators: 200<br>
+max_depth: 5<br>
+learning_rate: 0.1<br>
+subsample: 0.8<br>
+colsample_bytree: 0.8<br>
 objective: reg:squarederror
                     </code>
                 </div>
-                <p class="text-sm text-gray-500 mt-2">Hyperparameters are tuned via inner cross-validation (GridSearchCV).</p>
+                <p class="text-sm text-gray-500 mt-2">Fixed parameters ensure consistency across quarters. No hyperparameter tuning is performed.</p>
             </div>
         </section>
 
@@ -208,7 +225,7 @@ objective: reg:squarederror
 
             <div class="space-y-4 text-gray-300">
                 <p class="text-sm">
-                    The model uses <strong>repeated nested cross-validation</strong> to generate prediction distributions.
+                    The model uses <strong>repeated K-fold cross-validation</strong> to generate prediction distributions.
                     This approach prevents data leakage and provides uncertainty estimates.
                 </p>
 

@@ -21,8 +21,8 @@ const quarterDataCache: Map<string, QuarterValuationData> = new Map();
 let currentScatterData: ScatterPoint[] = [];
 
 // Stock table state
-let stockSortColumn: string = 'mispricing';
-let stockSortAscending: boolean = true;
+let stockSortColumn: string = 'actual';
+let stockSortAscending: boolean = false;
 let stockSearchQuery: string = '';
 let allStockData: ScatterPoint[] = [];
 let stockPage: number = 0;
