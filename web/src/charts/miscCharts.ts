@@ -175,8 +175,8 @@ export function renderSizePremiumChart(data: SizeCoefficient[], elementId: strin
     }
 
     const x = data.map(d => d.quarter);
-    // Handle both field name variants: slope/beta and se/slopeSE
-    const y = data.map(d => ((d.slope ?? d.beta) || 0) * 100);
+    // Negate slope so that "Size Premium" is positive (Small > Large)
+    const y = data.map(d => -((d.slope ?? d.beta) || 0) * 100);
     const errors = data.map(d => ((d.se ?? d.slopeSE) || 0) * 100);
 
     const trace: PlotData = {
@@ -200,7 +200,7 @@ export function renderSizePremiumChart(data: SizeCoefficient[], elementId: strin
         paper_bgcolor: PAPER_BG_COLOR,
         plot_bgcolor: PLOT_BG_COLOR,
         xaxis: { tickfont: { color: TEXT_COLOR }, gridcolor: GRID_COLOR },
-        yaxis: { title: 'Size Elasticity (Beta)', ticksuffix: '%', tickfont: { color: TEXT_COLOR }, titlefont: { color: TEXT_COLOR }, gridcolor: GRID_COLOR },
+        yaxis: { title: 'Size Premium (Beta)', ticksuffix: '%', tickfont: { color: TEXT_COLOR }, titlefont: { color: TEXT_COLOR }, gridcolor: GRID_COLOR },
         shapes: [{
             type: 'line',
             x0: x[0],

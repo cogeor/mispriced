@@ -108,6 +108,17 @@ def get_valuation_data_with_sectors(quarter_date: datetime = None) -> pd.DataFra
 
     session = SessionLocal()
     try:
+        # DEBUG: List all quarterly counts
+        counts = (
+            session.query(ValuationResult.snapshot_timestamp, func.count(func.distinct(ValuationResult.ticker)))
+            .group_by(ValuationResult.snapshot_timestamp)
+            .order_by(ValuationResult.snapshot_timestamp.desc())
+            .all()
+        )
+        print(f"DEBUG: Found {len(counts)} quarters in DB:")
+        for q, c in counts[:5]:
+             print(f"  {q}: {c} tickers")
+
         # If no quarter specified, find the latest one with significant data
         # Use 1000 threshold to match pipeline's MIN_SNAPSHOTS_FOR_QUARTER
         if quarter_date is None:
@@ -141,7 +152,10 @@ def get_valuation_data_with_sectors(quarter_date: datetime = None) -> pd.DataFra
         # Query valuations for this specific quarter and model
         # Also join with FinancialSnapshot to get price_t0 and shares_outstanding
         # for calculating historical market cap
-        query = session.query(
+        # Query valuations for this specific quarter and model
+        # Also join with FinancialSnapshot to get price_t0 and shares_outstanding
+        # for calculating historical market cap
+        base_query = session.query(
             ValuationResult.ticker,
             ValuationResult.actual_mcap,
             ValuationResult.predicted_mcap_mean,
@@ -153,16 +167,22 @@ def get_valuation_data_with_sectors(quarter_date: datetime = None) -> pd.DataFra
             Ticker.sector,
             Ticker.company_name,
             Ticker.industry,
+            Ticker.original_currency,  # More reliable than outer-joined stored_currency
             FinancialSnapshot.price_t0,
             FinancialSnapshot.shares_outstanding,
             FinancialSnapshot.stored_currency,
         ).join(
             Ticker, Ticker.ticker == ValuationResult.ticker
-        ).join(
+        ).outerjoin(
+            # Use OUTER JOIN for FinancialSnapshot since valuation timestamps may not
+            # exactly match snapshot timestamps (e.g., for stocks with different fiscal years
+            # like NVDA). Missing snapshot data is handled gracefully with defaults.
             FinancialSnapshot,
             (FinancialSnapshot.ticker == ValuationResult.ticker) &
             (FinancialSnapshot.snapshot_timestamp == ValuationResult.snapshot_timestamp)
-        ).filter(
+        )
+
+        query = base_query.filter(
             ValuationResult.snapshot_timestamp == quarter_date
         )
 
@@ -170,36 +190,51 @@ def get_valuation_data_with_sectors(quarter_date: datetime = None) -> pd.DataFra
             query = query.filter(ValuationResult.model_version == model_version)
 
         df = pd.read_sql(query.statement, session.bind)
+        
+        if df.empty:
+            print(f"  Exact timestamp match failed. Trying date match for {quarter_date.date()}...")
+            query = base_query.filter(
+                func.date(ValuationResult.snapshot_timestamp) == quarter_date.strftime("%Y-%m-%d")
+            )
+            if model_version:
+                 query = query.filter(ValuationResult.model_version == model_version)
+            df = pd.read_sql(query.statement, session.bind)
 
         # Deduplicate by ticker (shouldn't be needed but safety check)
         df = df.drop_duplicates(subset=["ticker"])
 
         df["predicted_mcap_mean"] = pd.to_numeric(df["predicted_mcap_mean"], errors="coerce")
-        df["relative_error"] = pd.to_numeric(df["relative_error"], errors="coerce")
         df["actual_mcap"] = pd.to_numeric(df["actual_mcap"], errors="coerce")
 
-        # Back-calculate actual_mcap from predicted and relative_error
-        # This ensures consistency: actual = predicted / (1 + relative_error)
-        # The relative_error in DB was computed correctly during valuation
-        valid_mask = (
-            df["predicted_mcap_mean"].notna() &
-            df["relative_error"].notna() &
-            (df["relative_error"] > -0.99)  # Avoid division by near-zero
-        )
-        df.loc[valid_mask, "actual_mcap"] = (
-            df.loc[valid_mask, "predicted_mcap_mean"] /
-            (1 + df.loc[valid_mask, "relative_error"])
+        # Currency conversion: convert non-USD values to USD
+        # Prefer stored_currency from FinancialSnapshot, fallback to Ticker.original_currency if NULL
+        # This handles cases where the OUTER JOIN fails (no matching snapshot)
+        currency_col = df["stored_currency"].fillna(df.get("original_currency")).fillna("USD")
+        df["effective_currency"] = currency_col
+        df["fx_rate"] = df["effective_currency"].map(FX_TO_USD).fillna(1.0)
+        needs_fx = (df["effective_currency"] != "USD") & df["fx_rate"].notna()
+        
+        # Convert both actual and predicted to USD
+        df.loc[needs_fx, "actual_mcap"] = df.loc[needs_fx, "actual_mcap"] * df.loc[needs_fx, "fx_rate"]
+        df.loc[needs_fx, "predicted_mcap_mean"] = df.loc[needs_fx, "predicted_mcap_mean"] * df.loc[needs_fx, "fx_rate"]
+        
+        print(f"  Applied FX conversion to {needs_fx.sum()} non-USD stocks")
+
+        # Recalculate relative_error with USD-normalized mcaps
+        valid_mask = df["actual_mcap"].notna() & (df["actual_mcap"] > 0)
+        df.loc[valid_mask, "relative_error"] = (
+            (df.loc[valid_mask, "predicted_mcap_mean"] - df.loc[valid_mask, "actual_mcap"])
+            / df.loc[valid_mask, "actual_mcap"]
         )
 
         # Recalculate residual_error (size-neutral mispricing)
         from src.valuation.size_correction import compute_residual_mispricing
-        compute_mask = df["actual_mcap"].notna() & (df["actual_mcap"] > 0)
-        if compute_mask.sum() > 10:  # Need enough data for regression
+        if valid_mask.sum() > 10:  # Need enough data for regression
             residual_err, _ = compute_residual_mispricing(
-                df.loc[compute_mask, "relative_error"].values,
-                df.loc[compute_mask, "actual_mcap"].values
+                df.loc[valid_mask, "relative_error"].values,
+                df.loc[valid_mask, "actual_mcap"].values
             )
-            df.loc[compute_mask, "residual_error"] = residual_err
+            df.loc[valid_mask, "residual_error"] = residual_err
 
         # Clean sector data
         df["sector"] = df["sector"].fillna("Unknown")
@@ -634,20 +669,33 @@ def compute_summary_stats(
     }
 
 
-def build_scatter_data(valuation_df: pd.DataFrame, min_mcap_b: float = 0.1) -> List[Dict[str, Any]]:
+def build_scatter_data(
+    valuation_df: pd.DataFrame, 
+    min_mcap_b: float = 0.1,
+    exclude_smallest: int = 700
+) -> List[Dict[str, Any]]:
     """Build scatter data from a valuation dataframe.
 
     Args:
         valuation_df: DataFrame with valuation results
         min_mcap_b: Minimum market cap in billions to include (default 0.1 = $100M)
+        exclude_smallest: Number of smallest companies by mcap to exclude (default 500)
+                         This improves frontend rendering performance.
     """
+    # First filter by min mcap
+    df = valuation_df.copy()
+    df["actual_mcap_b"] = pd.to_numeric(df["actual_mcap"], errors="coerce") / 1e9
+    df = df[df["actual_mcap_b"] >= min_mcap_b]
+    
+    # Exclude the smallest N companies by market cap
+    if exclude_smallest > 0 and len(df) > exclude_smallest:
+        # Sort by mcap ascending, drop the smallest N
+        df = df.nlargest(len(df) - exclude_smallest, "actual_mcap_b")
+        print(f"  Excluded {exclude_smallest} smallest companies. Remaining: {len(df)}")
+    
     scatter_data = []
-    for _, row in valuation_df.iterrows():
-        actual_b = float(row["actual_mcap"]) / 1e9
-
-        # Skip micro-cap stocks - model predictions unreliable
-        if actual_b < min_mcap_b:
-            continue
+    for _, row in df.iterrows():
+        actual_b = float(row["actual_mcap_b"])
         predicted_b = float(row["predicted_mcap_mean"]) / 1e9
         mispricing = float(row["relative_error"])
         residual_mispricing = float(row["residual_error"]) if pd.notna(row["residual_error"]) else mispricing
@@ -710,15 +758,27 @@ def build_and_save_dashboard_data(
 
     # Prepare size premium curve data
     size_premium_curve = []
+    size_correction_model = None
+
     if size_correction:
         est = size_correction.size_premium_estimate
+        
+        # Save model coefficients if available
+        if hasattr(est, 'coefficients') and est.coefficients:
+            size_correction_model = {
+                "method": est.estimation_method,
+                "coefficients": est.coefficients, # [a, b, c]
+                "equation": "log(1 + mispricing) = a*logMcap^2 + b*logMcap + c"
+            }
+
         # Sample points along the curve for plotting
         if hasattr(est, 'log_mcap_grid'):
              for i in range(0, len(est.log_mcap_grid), max(1, len(est.log_mcap_grid) // 50)):
                 size_premium_curve.append({
                     "logMcap": float(est.log_mcap_grid[i]),
                     "mcapB": float(np.exp(est.log_mcap_grid[i])) / 1e9,
-                    "expectedMispricing": float(est.expected_mispricing[i]),
+                    # Convert log-space expectation back to percentage: exp(y) - 1
+                    "expectedMispricing": float(np.expm1(est.expected_mispricing[i])),
                 })
 
     # Prepare valuation scatter data (for latest quarter only)
@@ -756,6 +816,7 @@ def build_and_save_dashboard_data(
         "index_timeseries": index_timeseries,
         "sector_timeseries": sector_timeseries,
         "size_premium_curve": size_premium_curve,
+        "size_correction_model": size_correction_model,
         "size_coefficients": size_coefficients,
         "available_quarters": available_quarters or [],
     }
@@ -791,14 +852,27 @@ def save_quarter_data(quarter_str: str, quarter_df: pd.DataFrame) -> None:
 
 def main() -> None:
     """Generate the financial dashboard data."""
-    print("Generating Financial Dashboard Data...")
+    with open("dashboard_debug.log", "w") as log:
+        log.write("Generating Financial Dashboard Data...\n")
+        print("Generating Financial Dashboard Data...")
 
     # Load data
-    print("  Loading valuation data with sectors...")
+    with open("dashboard_debug.log", "a") as log:
+        log.write("Fetching valuation data...\n")
+    print("Fetching valuation data...")
     valuation_df = get_valuation_data_with_sectors()
+    
+    with open("dashboard_debug.log", "a") as log:
+        log.write(f"Valuation DataFrame shape: {valuation_df.shape}\n")
+    print(f"Valuation DataFrame shape: {valuation_df.shape}")
+    
+    if valuation_df.empty:
+        print("ERROR: Valuation DataFrame is empty!")
+        # Proceeding will save empty JSON
+        
     print(f"  Loaded {len(valuation_df)} valuations")
 
-    print("  Loading index analysis data...")
+    print("Fetching index analysis...")
     index_data = get_index_analysis_data()
     print(f"  Loaded {len(index_data)} indices")
 
@@ -818,8 +892,17 @@ def main() -> None:
         print("Error: No valuation data found. Run the valuation pipeline first.")
         return
 
-    # Size correction is now applied at valuation time and stored in DB (residual_error)
+    # Re-estimate size correction model to get coefficients and curve for dashboard
+    # (The residual_error values are already in valuation_df, but we need the model params)
+    print("  Estimating size premium model for visualization...")
     size_correction = None
+    if not valuation_df.empty:
+        # Use simple arrays
+        mispricing_vals = valuation_df["relative_error"].values
+        mcap_vals = valuation_df["actual_mcap"].values
+        
+        # apply_size_correction handles filtering internally
+        size_correction = apply_size_correction(mispricing_vals, mcap_vals)
 
     # Load per-quarter size coefficients for time-series chart
     print("  Computing per-quarter size coefficients...")

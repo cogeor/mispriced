@@ -62,8 +62,17 @@ class SnapshotBuilder:
 
         # Handle currency conversion
         original_currency = company_info.get("currency", "USD")
+        financial_currency = company_info.get("financialCurrency")
+        
+        # If financial_currency is missing or None, fallback to original_currency
+        if not financial_currency:
+            financial_currency = original_currency
+
         converted_data, stored_currency, fx_rate = self._convert_monetary_fields(
-            mapped_data, original_currency, statement_date
+            mapped_data, 
+            trading_currency=original_currency,
+            financial_currency=financial_currency,
+            as_of_date=statement_date
         )
 
         # Build the snapshot
@@ -109,23 +118,34 @@ class SnapshotBuilder:
     def _convert_monetary_fields(
         self,
         data: Dict[str, Any],
-        original_currency: str,
+        trading_currency: str,
+        financial_currency: str,
         as_of_date: date,
     ) -> tuple[Dict[str, Any], str, Optional[float]]:
         """
         Convert monetary fields to USD if possible.
+        
+        Uses trading_currency for market data (market_cap) and
+        financial_currency for financial statements (revenue, debt, etc).
 
         Args:
             data: Mapped data dictionary
-            original_currency: Native currency of the company
+            trading_currency: Currency for stock price/market cap
+            financial_currency: Currency for financial statements
             as_of_date: Date for FX rate lookup
 
         Returns:
             (converted_data, stored_currency, fx_rate_to_usd)
+            Note: fx_rate_to_usd returned is the TRADING currency rate, 
+            as that's the primary reference for the stock.
         """
-        # Monetary fields that need conversion
-        MONETARY_FIELDS = {
+        # Fields derived from stock price (Trading Currency)
+        TRADING_FIELDS = {
             "market_cap_t0",
+        }
+        
+        # Fields from financial statements (Financial Currency)
+        FINANCIAL_FIELDS = {
             "total_revenue",
             "gross_profit",
             "ebitda",
@@ -140,25 +160,54 @@ class SnapshotBuilder:
             "book_value",
         }
 
-        if original_currency == "USD":
-            return data, "USD", 1.0
+        # 1. Get FX Rates
+        trading_fx = 1.0
+        if trading_currency != "USD":
+            try:
+                trading_fx = self.fx_provider.get_rate(trading_currency, "USD", as_of_date)
+            except Exception:
+                trading_fx = None # Failed
+        
+        financial_fx = 1.0
+        if financial_currency != "USD":
+            try:
+                financial_fx = self.fx_provider.get_rate(financial_currency, "USD", as_of_date)
+            except Exception:
+                financial_fx = None # Failed
 
-        # Try to get FX rate
-        try:
-            fx_rate = self.fx_provider.get_rate(original_currency, "USD", as_of_date)
-        except Exception:
-            # Fallback: keep original currency
-            return data, original_currency, None
-
-        # Convert monetary fields
+        # 2. Convert fields
         converted = {}
         for key, value in data.items():
-            if key in MONETARY_FIELDS and value is not None:
-                try:
-                    converted[key] = float(value) * fx_rate
-                except (TypeError, ValueError):
+            if value is None:
+                converted[key] = None
+                continue
+                
+            # Handle Trading Fields
+            if key in TRADING_FIELDS:
+                if trading_fx is not None:
+                     try:
+                        converted[key] = float(value) * trading_fx
+                     except (TypeError, ValueError):
+                        converted[key] = value
+                else:
+                    # Keep original if rate missing
                     converted[key] = value
+            
+            # Handle Financial Fields
+            elif key in FINANCIAL_FIELDS:
+                if financial_fx is not None:
+                    try:
+                        converted[key] = float(value) * financial_fx
+                    except (TypeError, ValueError):
+                        converted[key] = value
+                else:
+                     converted[key] = value
+                     
+            # Non-monetary or already handled
             else:
                 converted[key] = value
 
-        return converted, "USD", fx_rate
+        # We return the trading FX rate as the primary "fx_rate_to_usd" 
+        # because the Snapshot's 'original_currency' is typically the trading currency.
+        # Ideally we'd store both, but schema has one. Trading makes sense for Price reference.
+        return converted, "USD", trading_fx

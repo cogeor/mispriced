@@ -194,9 +194,21 @@ def main():
             
             tickers = df["ticker"].tolist()
             
+            # Determine which horizons are available based on days since quarter
+            today = date.today()
+            days_since_quarter = (today - q_date).days
+            available_horizons = [h for h in HORIZONS if h <= days_since_quarter - 5]  # -5 for price lag buffer
+            
+            if not available_horizons:
+                logger.info(f"  Skipping: Only {days_since_quarter} days elapsed, need at least {min(HORIZONS) + 5}")
+                continue
+            
+            logger.info(f"  Days since quarter: {days_since_quarter}, horizons available: {available_horizons}")
+            
             # Fetch prices
             start_date = q_date - timedelta(days=5)
-            end_date = q_date + timedelta(days=max(HORIZONS) + 10)
+            max_available_horizon = max(available_horizons)
+            end_date = q_date + timedelta(days=max_available_horizon + 10)
             
             logger.info(f"  Fetching prices...")
             prices = fetch_and_cache_prices(session, tickers, start_date, end_date, batch_size=100)
@@ -211,7 +223,7 @@ def main():
                     sector_tickers = sector_df["ticker"].tolist()
                     sector_signal = sector_df[signal_col].values
                     
-                    metrics = compute_group_metrics(sector_tickers, sector_signal, prices, q_date, HORIZONS)
+                    metrics = compute_group_metrics(sector_tickers, sector_signal, prices, q_date, available_horizons)
                     for m in metrics:
                         m["metric"] = metric
                         m["group_type"] = "sector"
@@ -231,7 +243,7 @@ def main():
                     idx_tickers = idx_df["ticker"].tolist()
                     idx_signal = idx_df[signal_col].values
                     
-                    metrics = compute_group_metrics(idx_tickers, idx_signal, prices, q_date, HORIZONS)
+                    metrics = compute_group_metrics(idx_tickers, idx_signal, prices, q_date, available_horizons)
                     for m in metrics:
                         m["metric"] = metric
                         m["group_type"] = "index"

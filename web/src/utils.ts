@@ -88,26 +88,36 @@ export function aggregateToSummary(
 ): AggregateResult {
     if (!tsData || tsData.length === 0) return { data: [], quarter: null };
 
-    // If no quarter specified, find the one with most complete data
+    // Build quarter counts
+    const quarterCounts: Record<string, number> = {};
+    tsData.forEach(d => {
+        if (d.quarter) {
+            quarterCounts[d.quarter] = (quarterCounts[d.quarter] || 0) + 1;
+        }
+    });
+
+    // Sort quarters by date (most recent first)
+    const quarters = Object.entries(quarterCounts)
+        .sort((a, b) => b[0].localeCompare(a[0]));
+
+    if (quarters.length === 0) return { data: [], quarter: null };
+
+    // Determine target quarter
     let targetQuarter = forQuarter;
-    if (!targetQuarter) {
-        const quarterCounts: Record<string, number> = {};
-        tsData.forEach(d => {
-            if (d.quarter) {
-                quarterCounts[d.quarter] = (quarterCounts[d.quarter] || 0) + 1;
-            }
-        });
-        // Sort quarters and pick the most recent with good data count
-        const quarters = Object.entries(quarterCounts)
-            .sort((a, b) => b[0].localeCompare(a[0])); // Recent first
-        if (quarters.length > 0) {
-            // Pick first quarter that has at least 70% of max count (complete data)
-            const maxCount = Math.max(...Object.values(quarterCounts));
-            targetQuarter = quarters.find(([, count]) => count >= maxCount * 0.7)?.[0] || quarters[0]?.[0];
+
+    // If requested quarter has no data (or was not specified), find best available
+    if (!targetQuarter || !quarterCounts[targetQuarter]) {
+        // Pick the most recent quarter with at least 70% of max count (complete data)
+        const maxCount = Math.max(...Object.values(quarterCounts));
+        targetQuarter = quarters.find(([, count]) => count >= maxCount * 0.7)?.[0] || quarters[0]?.[0];
+
+        // Log fallback if a specific quarter was requested but not found
+        if (forQuarter && forQuarter !== targetQuarter) {
+            console.log(`Backtest: No data for ${forQuarter}, showing ${targetQuarter} instead`);
         }
     }
 
-    // Filter to target quarter if we have one
+    // Filter to target quarter
     const filteredData = targetQuarter
         ? tsData.filter(d => d.quarter === targetQuarter)
         : tsData;

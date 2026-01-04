@@ -244,9 +244,12 @@ export function renderSectorTimeSeriesMulti(
     if (!el) return;
 
     // Group by sector
+    // Filter out 'Unknown' sector
+    const filteredData = sectorTimeSeries.filter(d => d.sector && d.sector !== 'Unknown');
+
     // Negate mispricing so positive = overvalued (consistent with bar charts)
     const statsBySector = new Map<string, { dates: string[]; values: number[]; counts: number[] }>();
-    sectorTimeSeries.forEach(d => {
+    filteredData.forEach(d => {
         if (!statsBySector.has(d.sector)) statsBySector.set(d.sector, { dates: [], values: [], counts: [] });
         const entry = statsBySector.get(d.sector)!;
         const rawVal = metricKey === 'residualMispricing' ? (d.residualMispricing || 0) : d.mispricing;
@@ -257,7 +260,7 @@ export function renderSectorTimeSeriesMulti(
 
     // Compute Global aggregate
     const dateData = new Map<string, { values: number[]; counts: number[] }>();
-    sectorTimeSeries.forEach(d => {
+    filteredData.forEach(d => {
         const rawVal = metricKey === 'residualMispricing' ? (d.residualMispricing || 0) : d.mispricing;
         if (!dateData.has(d.date)) dateData.set(d.date, { values: [], counts: [] });
         const entry = dateData.get(d.date)!;
@@ -282,7 +285,7 @@ export function renderSectorTimeSeriesMulti(
 
     // Sort sectors by total count (proxy for mcap)
     const sectorTotalCounts: Record<string, number> = {};
-    sectorTimeSeries.forEach(d => {
+    filteredData.forEach(d => {
         sectorTotalCounts[d.sector] = (sectorTotalCounts[d.sector] || 0) + d.count;
     });
     const sortedSectors = Object.entries(sectorTotalCounts)

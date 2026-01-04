@@ -117,6 +117,12 @@ export interface QuarterValuationData {
     sector_breakdown: SectorBreakdownItem[];
 }
 
+export interface SizeCorrectionModel {
+    method: string;
+    coefficients: number[];
+    equation: string;
+}
+
 export interface DashboardData {
     generated_at: string;
     stats: DashboardStats;
@@ -129,6 +135,7 @@ export interface DashboardData {
     size_premium_curve: SizePremiumPoint[];
     size_coefficients: SizeCoefficient[];
     available_quarters: string[];  // List of available quarters for lazy loading
+    size_correction_model?: SizeCorrectionModel; // Quadratic model coefficients
 }
 
 export type MispricingMode = 'raw' | 'sizeNeutral';

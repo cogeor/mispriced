@@ -127,6 +127,9 @@ export function renderValuationMap(
     };
 
     const config = { responsive: true, displayModeBar: false };
+
+    // Use Plotly.react for efficient updates (preserves layout, only updates data)
+    // This is faster than newPlot for mode switching since layout doesn't change
     Plotly.react(elementId, [trace], layout, config);
 
     // Add click handler

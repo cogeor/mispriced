@@ -7,7 +7,7 @@ import { buildICHeatmap, renderSignalDecay, type HorizonDecayItem } from './char
 import { renderSectorChart, renderUncertaintyChart, renderSizePremiumChart } from './charts/miscCharts';
 
 let dashboardData: DashboardData | null = null;
-let mispricingMode: MispricingMode = 'sizeNeutral';
+let mispricingMode: MispricingMode = 'raw';
 const colorBy: ColorMode = 'mispricing'; // Always use mispricing color
 let selectedQuarter: string | null = null;
 // Default enabled indices/sectors for time series charts (set after data loads)
@@ -66,8 +66,6 @@ function updateStats(): void {
     if (!dashboardData) return;
 
     const s = dashboardData.stats;
-    setText('totalTickers', s.total_tickers.toLocaleString());
-    setText('totalMcap', s.total_actual_mcap_t.toFixed(1));
     setText('generatedAt', new Date(dashboardData.generated_at).toLocaleString());
 
     // Format quarter as Q1-Q4
@@ -79,27 +77,48 @@ function updateStats(): void {
 
     setText('indicesTracked', s.indices_tracked.toLocaleString());
 
+    // Use currentScatterData for dynamic stats (updates when quarter changes)
+    const scatterData = currentScatterData.length > 0 ? currentScatterData : dashboardData.scatter_data;
+
+    // Compute stats from filtered data (not static stats)
+    setText('totalTickers', scatterData.length.toLocaleString());
+    const totalMcapT = scatterData.reduce((sum, d) => sum + d.actual, 0) / 1000; // B to T
+    setText('totalMcap', totalMcapT.toFixed(1));
+
     // Calculate and display sectors tracked
-    if (dashboardData.scatter_data) {
-        const uniqueSectors = new Set(dashboardData.scatter_data.map(d => d.sector));
+    if (scatterData) {
+        const uniqueSectors = new Set(scatterData.map(d => d.sector));
         setText('sectorsTracked', uniqueSectors.size.toString());
     }
 
     // Compute dynamic stats based on mode
     const key: MetricKey = mispricingMode === 'sizeNeutral' ? 'residualMispricing' : 'mispricing';
-    const values = dashboardData.scatter_data
-        .map(d => d[key])
-        .filter((v): v is number => v !== undefined && v !== null && !isNaN(v))
-        .sort((a, b) => a - b);
-    const n = values.length;
+
+    // Filter valid data points
+    const validData = scatterData.filter(d =>
+        d[key] !== undefined && d[key] !== null && !isNaN(d[key]) && d.actual > 0
+    );
+    const n = validData.length;
+    if (n === 0) {
+        setText('medianMispricing', 'N/A');
+        setText('avgMispricing', 'N/A');
+        return;
+    }
+
+    // Simple median (equal weight per stock)
+    const values = validData.map(d => d[key]).sort((a, b) => a - b);
     const median = n % 2 === 0
         ? (values[n / 2 - 1] + values[n / 2]) / 2
         : values[Math.floor(n / 2)];
-    const avg = values.reduce((a, b) => a + b, 0) / n;
+
+    // Market-cap weighted average: Sum(mispricing × mcap) / Sum(mcap)
+    const totalMcap = validData.reduce((sum, d) => sum + d.actual, 0);
+    const weightedSum = validData.reduce((sum, d) => sum + d[key] * d.actual, 0);
+    const weightedAvg = weightedSum / totalMcap;
 
     // Negate so positive = overvalued
     const negMedian = -median;
-    const negAvg = -avg;
+    const negAvg = -weightedAvg;
     setText('medianMispricing', (negMedian > 0 ? '+' : '') + (negMedian * 100).toFixed(1) + '%');
     // Note: HTML already has % after this span
     setText('avgMispricing', (negAvg > 0 ? '+' : '') + (negAvg * 100).toFixed(1));
@@ -153,16 +172,30 @@ function renderAllCharts(metricKey: MetricKey): void {
     });
 
     // Sector signal quality
+    // Try selectedQuarter first, aggregateToSummary will fall back to best quarter if no data exists
     const sectorResult = aggregateToSummary(dashboardData.backtest_data.sector_ts, selectedQuarter);
+    // Display which quarter was used (may differ from selectedQuarter if no data existed)
     buildICHeatmap(sectorResult.data, 'icSectorChart', backtestMetricKey, sectorResult.quarter, sectorMcap, true);
-    const sectorDecayData = recomputeDecay(dashboardData.backtest_data.sector_ts, backtestMetricKey, selectedQuarter);
+    const sectorDecayData = recomputeDecay(dashboardData.backtest_data.sector_ts, backtestMetricKey, sectorResult.quarter);
     renderSignalDecay(sectorDecayData, 'icSectorDecayChart');
 
     // Index signal quality
     const indexResult = aggregateToSummary(dashboardData.backtest_data.index_ts, selectedQuarter);
     buildICHeatmap(indexResult.data, 'icIndexChart', backtestMetricKey, indexResult.quarter, indexMcap, false);
-    const indexDecayData = recomputeDecay(dashboardData.backtest_data.index_ts, backtestMetricKey, selectedQuarter);
+    const indexDecayData = recomputeDecay(dashboardData.backtest_data.index_ts, backtestMetricKey, indexResult.quarter);
     renderSignalDecay(indexDecayData, 'icIndexDecayChart');
+
+    // Show note if backtest quarter differs from selected quarter
+    const backtestNote = document.getElementById('backtestQuarterNote');
+    if (backtestNote) {
+        const usedQuarter = sectorResult.quarter || indexResult.quarter;
+        if (selectedQuarter && usedQuarter && selectedQuarter !== usedQuarter) {
+            backtestNote.textContent = `⚠ Showing ${formatQuarter(usedQuarter)} data (${formatQuarter(selectedQuarter)} not yet available)`;
+            backtestNote.style.display = 'inline';
+        } else {
+            backtestNote.style.display = 'none';
+        }
+    }
 
     renderUncertaintyChart(currentScatterData, 'uncertaintyChart', metricKey);
     renderSizePremiumChart(dashboardData.size_coefficients, 'sizePremiumChart');
@@ -194,7 +227,54 @@ async function updateCharts(): Promise<void> {
     }
 
     // Render all charts with fetched data
+    applySizeCorrection(currentScatterData);
     renderAllCharts(metricKey);
+}
+
+function applySizeCorrection(data: ScatterPoint[]): void {
+    if (!dashboardData?.size_correction_model) return;
+
+    // The model in dashboardData applies to the latest quarter.
+    const latestQuarter = dashboardData.available_quarters?.[0];
+    if (selectedQuarter && latestQuarter && selectedQuarter !== latestQuarter) {
+        // For historical quarters, we rely on the pre-calculated residuals in the JSON
+        return;
+    }
+
+    const model = dashboardData.size_correction_model; // { coefficients: [a, b, c], ... }
+    const [a, b, c] = model.coefficients;
+
+    // Apply model: log(1 + mispricing) = a * log(mcap)^2 + b * log(mcap) + c
+    let count = 0;
+    data.forEach(d => {
+        // d.actual is in Billions. Model fits on log(Raw Dollars).
+        const mcapRaw = d.actual * 1e9;
+        if (mcapRaw <= 0) return;
+
+        const logMcap = Math.log(mcapRaw);
+
+        // Expected log(1+m)
+        const expectedLog = a * logMcap * logMcap + b * logMcap + c;
+
+        // Actual log(1+m)
+        // d.mispricing is the raw relative error
+        const actualLog = Math.log(1 + d.mispricing);
+
+        // Residual in log space
+        const residualLog = actualLog - expectedLog;
+
+        // Convert back to percentage
+        // residual = exp(residual_log) - 1
+        const residual = Math.exp(residualLog) - 1;
+
+        d.residualMispricing = residual;
+        d.residualMispricingPct = (residual * 100).toFixed(1) + '%';
+        count++;
+    });
+
+    if (count > 0) {
+        console.log(`Applied client-side size correction (log-quadratic) to ${count} points.`);
+    }
 }
 
 function recomputeDecay(ts: BacktestItem[], metric: string, quarter: string | null = null): HorizonDecayItem[] {

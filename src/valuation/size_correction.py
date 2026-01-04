@@ -70,9 +70,10 @@ def estimate_size_coefficient(
     valid_mask = (
         np.isfinite(mispricing) & 
         np.isfinite(market_cap) & 
-        (market_cap > 0)
+        (market_cap > 0) &
+        (mispricing > -0.99)
     )
-    y = mispricing[valid_mask]
+    y = np.log1p(mispricing[valid_mask])
     x = np.log(market_cap[valid_mask])
     
     if len(y) < 10:
@@ -142,6 +143,10 @@ class SizePremiumEstimate:
     estimation_method: str = "lowess"
     smoothing_frac: float = 0.3
     
+    # Fitted coefficients (for polynomial models)
+    # [a, b, c] for ax^2 + bx + c
+    coefficients: Optional[List[float]] = None
+    
     def get_expected_mispricing(self, log_mcap: np.ndarray) -> np.ndarray:
         """
         Interpolate expected mispricing for given log market caps.
@@ -152,8 +157,16 @@ class SizePremiumEstimate:
         Returns:
             Expected mispricing based on size (the "size premium")
         """
+        # If coefficients available, use them directly for smoother interpolation
+        if self.coefficients and self.estimation_method == "quadratic":
+            # Note: Model fitted on log(1+mispricing), so result is in log-space
+            # But this function is expected to return the correction in the SAME space as input fit
+            # If the user of this class expects percentage, we need to be careful.
+            # However, for consistency, this returns the fitted value Y_hat.
+            # If fitted on log(1+MP), this returns log(1+MP_expected).
+            return np.polyval(self.coefficients, log_mcap)
+            
         return np.interp(log_mcap, self.log_mcap_grid, self.expected_mispricing)
-
 
 
 def estimate_size_premium(
@@ -165,16 +178,18 @@ def estimate_size_premium(
     """
     Estimate the size premium using quadratic polynomial fit.
 
-    Model: E[mispricing | log(mcap)] = α + β*log(mcap) + γ*log(mcap)²
+    Model: log(1 + mispricing) = α + β*log(mcap) + γ*log(mcap)²
 
-    Quadratic fit captures non-linear size effects while remaining stable.
-    Data is winsorized before fitting to reduce influence of extreme outliers.
+    Uses log-transformed mispricing (approx log(Predicted/Actual)) for better
+    statistical properties and stability.
+    
+    NO clipping/winsorization is applied.
 
     Args:
-        mispricing: Raw mispricing values (any metric)
-        market_cap: Market cap values (will be log-transformed)
-        frac: Unused (kept for API compatibility)
-        winsorize_pct: Percentile bounds for winsorization (default 2nd to 98th)
+        mispricing: Raw mispricing values (relative_error)
+        market_cap: Market cap values
+        frac: Unused
+        winsorize_pct: Unused (winsorization removed)
 
     Returns:
         SizePremiumEstimate with fitted quadratic curve
@@ -183,7 +198,8 @@ def estimate_size_premium(
     valid_mask = (
         np.isfinite(mispricing) &
         np.isfinite(market_cap) &
-        (market_cap > 0)
+        (market_cap > 0) &
+        (mispricing > -0.99) # Ensure log(1+mp) is valid
     )
     mispricing_valid = mispricing[valid_mask]
     mcap_valid = market_cap[valid_mask]
@@ -198,19 +214,20 @@ def estimate_size_premium(
             n_observations=len(mispricing_valid),
             estimation_method="constant_zero",
             smoothing_frac=0.0,
+            coefficients=[0.0, 0.0, 0.0]
         )
 
-    # Winsorize mispricing to reduce influence of extreme outliers
-    lower_pct, upper_pct = winsorize_pct
-    lower_bound = np.percentile(mispricing_valid, lower_pct)
-    upper_bound = np.percentile(mispricing_valid, upper_pct)
-    mispricing_winsorized = np.clip(mispricing_valid, lower_bound, upper_bound)
-
+    # Use log(1 + mispricing) as target variable
+    # mispricing = (Pred - Actual) / Actual = Pred/Actual - 1
+    # 1 + mispricing = Pred/Actual
+    # log(1 + mispricing) = log(Pred) - log(Actual)
+    y_log = np.log1p(mispricing_valid)
+    
     # Log transform market cap
     log_mcap = np.log(mcap_valid)
 
-    # Fit quadratic polynomial: mispricing = α + β*log(mcap) + γ*log(mcap)²
-    coeffs = np.polyfit(log_mcap, mispricing_winsorized, 2)
+    # Fit quadratic polynomial: log(1+mp) = α + β*log(mcap) + γ*log(mcap)²
+    coeffs = np.polyfit(log_mcap, y_log, 2)
 
     # Create grid for expected values
     grid_x = np.linspace(log_mcap.min(), log_mcap.max(), 100)
@@ -224,6 +241,7 @@ def estimate_size_premium(
         n_observations=len(mispricing_valid),
         estimation_method="quadratic",
         smoothing_frac=0.0,
+        coefficients=coeffs.tolist(),
     )
 
 
@@ -277,9 +295,11 @@ def compute_residual_mispricing(
     """
     Compute size-neutral (residual) mispricing.
 
-    residual = mispricing - E[mispricing | size]
-
-    This is the tradable alpha signal, with structural size effects removed.
+    Uses log-space decomposition:
+    log(1 + residual) = log(1 + mispricing) - E[log(1 + mispricing) | size]
+    
+    This ensures proper multiplicative scaling:
+    (1 + mispricing) = (1 + residual) * (1 + size_premium)
 
     Args:
         mispricing: Raw mispricing values
@@ -292,16 +312,27 @@ def compute_residual_mispricing(
     if size_premium is None:
         size_premium = estimate_size_premium(mispricing, market_cap)
 
-    # Get expected mispricing for each observation
+    # Get expected mispricing (in log space) for each observation
     valid_mask = (market_cap > 0) & np.isfinite(market_cap)
     log_mcap = np.zeros_like(market_cap)
     log_mcap[valid_mask] = np.log(market_cap[valid_mask])
 
-    expected = size_premium.get_expected_mispricing(log_mcap)
+    # Expected value from model (fitted on log(1+m))
+    expected_log = size_premium.get_expected_mispricing(log_mcap)
 
-    # Residual = actual - expected
-    residual = mispricing - expected
+    # Actual value in log space
+    # Handle potentially small negative values safely (though inputs should be > -1)
+    # We clip slightly above -1 for stability if needed, but here we trust inputs or return NaN
+    actual_log = np.log1p(mispricing)
+    
+    # Residual in log space
+    residual_log = actual_log - expected_log
 
+    # Convert back to regular percentage space
+    # residual_pct = exp(residual_log) - 1
+    residual = np.expm1(residual_log)
+
+    # NO clipping applied (user request)
     return residual, size_premium
 
 
@@ -313,8 +344,16 @@ class SizeCorrectionResult(NamedTuple):
     
     @property
     def size_premium_values(self) -> np.ndarray:
-        """The size premium component for each observation."""
-        return self.raw_mispricing - self.residual_mispricing
+        """
+        The size premium component for each observation.
+        
+        Using multiplicative decomposition:
+        (1 + mispricing) = (1 + residual) * (1 + size_premium)
+        => (1 + size_premium) = (1 + mispricing) / (1 + residual)
+        => size_premium = ((1 + mispricing) / (1 + residual)) - 1
+        """
+        # Note: simplistic approximation for now, or could compute exact
+        return (1 + self.raw_mispricing) / (1 + self.residual_mispricing) - 1
 
 
 def apply_size_correction(

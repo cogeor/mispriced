@@ -119,7 +119,7 @@ def full_pipeline():
             for res in valuation_results:
                 session.merge(res)
             session.commit()
-            print("✅ Saved successfully.")
+            print("Saved successfully.")
             
              # Summary
             errors = [r.relative_error for r in valuation_results]
@@ -128,11 +128,11 @@ def full_pipeline():
 
         except Exception as e:
             session.rollback()
-            print(f"❌ Save Failed: {e}")
+            print(f"Save Failed: {e}")
             traceback.print_exc()
 
     except Exception as e:
-        print(f"❌ Pipeline Failed: {e}")
+        print(f"Pipeline Failed: {e}")
         traceback.print_exc()
     finally:
         session.close()
