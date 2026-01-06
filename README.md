@@ -1,6 +1,6 @@
 # Mispriced
 
-**Fundamental valuation software** — predicts fair market capitalization from financial statements and identifies mispriced securities.
+**Fundamental valuation software** — predicts fair market capitalization from financial statements and identifies mispriced securities. Now live at [mispriced.ch](https://mispriced.ch).
 
 ![Mispriced Dashboard](assets/mispriced.png)
 
