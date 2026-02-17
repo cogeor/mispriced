@@ -1,0 +1,15 @@
+loops:
+  - number: 1
+    summary: "Fix mobile layout - responsive controls and stat cards"
+    description: |
+      Implement all mobile layout fixes in a single loop:
+      1. Create unified mobile control bar that combines quarter selector and mode toggle
+      2. Hide desktop-positioned controls on mobile, show mobile bar instead
+      3. Fix stat card overflow by making values wrap/stack on mobile
+      4. Ensure sticky behavior works on mobile
+      5. Add proper breakpoint handling with Tailwind
+    tasks:
+      - Restructure HTML to have mobile-first control bar
+      - Add responsive CSS for stat cards to prevent overflow
+      - Update sticky JS logic to work on mobile
+      - Test across breakpoints

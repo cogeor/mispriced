@@ -479,7 +479,10 @@ async function fetchQuarterData(quarter: string): Promise<QuarterValuationData |
 
 function populateQuarterDropdown(): void {
     const select = document.getElementById('quarterSelect') as HTMLSelectElement | null;
-    if (!select || select.dataset.populated || !dashboardData) return;
+    const selectMobile = document.getElementById('quarterSelectMobile') as HTMLSelectElement | null;
+
+    if (!dashboardData) return;
+    if (select?.dataset.populated && selectMobile?.dataset.populated) return;
 
     // Use available_quarters from dashboard data (already sorted desc)
     const quarters = dashboardData.available_quarters || [];
@@ -489,11 +492,19 @@ function populateQuarterDropdown(): void {
     // Default to latest (first) quarter
     if (!selectedQuarter) selectedQuarter = quarters[0];
 
-    select.innerHTML = quarters.map(q =>
+    const optionsHtml = quarters.map(q =>
         `<option value="${q}" ${q === selectedQuarter ? 'selected' : ''}>${formatQuarter(q)}</option>`
     ).join('');
 
-    select.dataset.populated = 'true';
+    if (select && !select.dataset.populated) {
+        select.innerHTML = optionsHtml;
+        select.dataset.populated = 'true';
+    }
+
+    if (selectMobile && !selectMobile.dataset.populated) {
+        selectMobile.innerHTML = optionsHtml;
+        selectMobile.dataset.populated = 'true';
+    }
 }
 
 function renderStockTable(metricKey: MetricKey, resetPage: boolean = true): void {
@@ -670,12 +681,17 @@ function setText(id: string, val: string): void {
 }
 
 function setupEventListeners(): void {
-    // Mode toggle
+    // Mode toggle - desktop
     const modeRaw = document.getElementById('modeRaw');
     const modeSizeNeutral = document.getElementById('modeSizeNeutral');
+    // Mode toggle - mobile
+    const modeRawMobile = document.getElementById('modeRawMobile');
+    const modeSizeNeutralMobile = document.getElementById('modeSizeNeutralMobile');
 
     if (modeRaw) modeRaw.addEventListener('click', () => setMode('raw'));
     if (modeSizeNeutral) modeSizeNeutral.addEventListener('click', () => setMode('sizeNeutral'));
+    if (modeRawMobile) modeRawMobile.addEventListener('click', () => setMode('raw'));
+    if (modeSizeNeutralMobile) modeSizeNeutralMobile.addEventListener('click', () => setMode('sizeNeutral'));
 
     // Sticky mode toggle - use right positioning relative to parent card
     const modeToggle = document.getElementById('modeToggle');
@@ -722,26 +738,35 @@ function setupEventListeners(): void {
         window.addEventListener('resize', onResize, { passive: true });
     }
 
-    // Quarter select - fetch quarter data lazily
+    // Quarter select - fetch quarter data lazily (both desktop and mobile)
     const quarterSelect = document.getElementById('quarterSelect') as HTMLSelectElement | null;
+    const quarterSelectMobile = document.getElementById('quarterSelectMobile') as HTMLSelectElement | null;
+
+    const handleQuarterChange = async (e: Event, otherSelect: HTMLSelectElement | null) => {
+        const newQuarter = (e.target as HTMLSelectElement).value || null;
+        if (newQuarter === selectedQuarter) return;
+
+        selectedQuarter = newQuarter;
+
+        // Sync both selects
+        if (otherSelect) otherSelect.value = newQuarter || '';
+
+        // Show loading state on both
+        const selects = [quarterSelect, quarterSelectMobile].filter(Boolean) as HTMLSelectElement[];
+        selects.forEach(s => { s.disabled = true; s.style.opacity = '0.5'; });
+
+        try {
+            await updateCharts();
+        } finally {
+            selects.forEach(s => { s.disabled = false; s.style.opacity = '1'; });
+        }
+    };
+
     if (quarterSelect) {
-        quarterSelect.addEventListener('change', async (e) => {
-            const newQuarter = (e.target as HTMLSelectElement).value || null;
-            if (newQuarter === selectedQuarter) return;
-
-            selectedQuarter = newQuarter;
-
-            // Show loading state
-            quarterSelect.disabled = true;
-            quarterSelect.style.opacity = '0.5';
-
-            try {
-                await updateCharts();
-            } finally {
-                quarterSelect.disabled = false;
-                quarterSelect.style.opacity = '1';
-            }
-        });
+        quarterSelect.addEventListener('change', (e) => handleQuarterChange(e, quarterSelectMobile));
+    }
+    if (quarterSelectMobile) {
+        quarterSelectMobile.addEventListener('change', (e) => handleQuarterChange(e, quarterSelect));
     }
 
     // Stock search
@@ -806,15 +831,23 @@ function setupEventListeners(): void {
 function setMode(mode: MispricingMode): void {
     mispricingMode = mode;
 
+    // Desktop buttons
     const rawBtn = document.getElementById('modeRaw');
     const sizeNeutralBtn = document.getElementById('modeSizeNeutral');
+    // Mobile buttons
+    const rawBtnMobile = document.getElementById('modeRawMobile');
+    const sizeNeutralBtnMobile = document.getElementById('modeSizeNeutralMobile');
 
     if (mode === 'raw') {
         rawBtn?.classList.add('active');
         sizeNeutralBtn?.classList.remove('active');
+        rawBtnMobile?.classList.add('active');
+        sizeNeutralBtnMobile?.classList.remove('active');
     } else {
         sizeNeutralBtn?.classList.add('active');
         rawBtn?.classList.remove('active');
+        sizeNeutralBtnMobile?.classList.add('active');
+        rawBtnMobile?.classList.remove('active');
     }
 
     if (dashboardData) {
