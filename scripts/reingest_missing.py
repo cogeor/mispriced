@@ -10,11 +10,12 @@ Usage:
 import asyncio
 import sys
 import os
-import sqlite3
+import logging
 from typing import List, Optional
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
+from sqlalchemy import text
 from src.db.session import SessionLocal
 from src.db.repositories.ticker_repo import TickerRepository
 from src.db.repositories.snapshot_repo import SnapshotRepository
@@ -24,44 +25,60 @@ from src.ingestion.service import IngestionService
 from src.ingestion.config import IngestionConfig
 from src.ingestion.report import IngestionReport
 
+logger = logging.getLogger(__name__)
+
+
+def parse_quarter_string(quarter_str: str) -> tuple[str, str]:
+    """Parse a quarter string like '2024-Q1' or '2025-Q3' into (start_date, end_date).
+
+    Supports any year, not just hardcoded dates.
+    """
+    parts = quarter_str.strip().split("-")
+    if len(parts) != 2 or not parts[1].upper().startswith("Q"):
+        raise ValueError(f"Invalid quarter format: {quarter_str}. Expected YYYY-QN (e.g., 2025-Q1)")
+
+    year = int(parts[0])
+    q = int(parts[1].upper().replace("Q", ""))
+    if q < 1 or q > 4:
+        raise ValueError(f"Invalid quarter number: {q}. Must be 1-4.")
+
+    quarter_ranges = {
+        1: (f"{year}-01-01", f"{year}-03-31"),
+        2: (f"{year}-04-01", f"{year}-06-30"),
+        3: (f"{year}-07-01", f"{year}-09-30"),
+        4: (f"{year}-10-01", f"{year}-12-31"),
+    }
+    return quarter_ranges[q]
+
 
 def get_tickers_with_missing_data(quarters: Optional[List[str]] = None, min_mcap: float = 1e9) -> List[str]:
     """Get tickers that have NULL financials in specified quarters."""
-    conn = sqlite3.connect('mispriced.db')
-
-    # Map quarter strings to date ranges
-    quarter_dates = {
-        '2024-Q1': ('2024-01-01', '2024-03-31'),
-        '2024-Q2': ('2024-04-01', '2024-06-30'),
-        '2024-Q3': ('2024-07-01', '2024-09-30'),
-    }
-
-    if quarters:
-        conditions = []
-        for q in quarters:
-            if q in quarter_dates:
-                start, end = quarter_dates[q]
+    db = SessionLocal()
+    try:
+        if quarters:
+            conditions = []
+            for q in quarters:
+                start, end = parse_quarter_string(q)
                 conditions.append(f"(date(snapshot_timestamp) BETWEEN '{start}' AND '{end}')")
-        date_filter = " OR ".join(conditions)
-    else:
-        # Default: Q1-Q3 2024
-        date_filter = "(date(snapshot_timestamp) BETWEEN '2024-01-01' AND '2024-09-30')"
+            date_filter = " OR ".join(conditions)
+        else:
+            # Default: all snapshots (no date restriction)
+            date_filter = "1=1"
 
-    query = f"""
-    SELECT DISTINCT ticker
-    FROM financial_snapshots
-    WHERE ({date_filter})
-    AND total_revenue IS NULL AND net_income IS NULL AND ebitda IS NULL
-    AND market_cap_t0 > {min_mcap}
-    ORDER BY market_cap_t0 DESC
-    """
+        query = text(f"""
+        SELECT DISTINCT ticker
+        FROM financial_snapshots
+        WHERE ({date_filter})
+        AND total_revenue IS NULL AND net_income IS NULL AND ebitda IS NULL
+        AND market_cap_t0 > :min_mcap
+        ORDER BY market_cap_t0 DESC
+        """)
 
-    cursor = conn.cursor()
-    cursor.execute(query)
-    tickers = [row[0] for row in cursor.fetchall()]
-    conn.close()
-
-    return tickers
+        result = db.execute(query, {"min_mcap": min_mcap})
+        tickers = [row[0] for row in result.fetchall()]
+        return tickers
+    finally:
+        db.close()
 
 
 async def reingest_tickers(tickers: List[str], batch_size: int = 50) -> IngestionReport:

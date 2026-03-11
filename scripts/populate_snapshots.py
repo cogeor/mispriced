@@ -92,12 +92,7 @@ async def populate(limit: int = None):
     
     if report.failures:
         print("Failures (first 5):", list(report.failures.items())[:5])
-        
-    db.close()
 
-    if report.failures:
-        print("Failures (first 5):", list(report.failures.items())[:5])
-        
     db.close()
 
 if __name__ == "__main__":

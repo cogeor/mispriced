@@ -7,10 +7,13 @@ Outputs: plots/dashboard.html
 import sys
 import os
 import json
+import logging
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 # Approximate FX rates to USD (for currencies not stored in USD)
 # These are used to convert actual_mcap to USD for comparison with USD predictions
@@ -115,9 +118,9 @@ def get_valuation_data_with_sectors(quarter_date: datetime = None) -> pd.DataFra
             .order_by(ValuationResult.snapshot_timestamp.desc())
             .all()
         )
-        print(f"DEBUG: Found {len(counts)} quarters in DB:")
+        logger.debug(f"Found {len(counts)} quarters in DB:")
         for q, c in counts[:5]:
-             print(f"  {q}: {c} tickers")
+             logger.debug(f"  {q}: {c} tickers")
 
         # If no quarter specified, find the latest one with significant data
         # Use 1000 threshold to match pipeline's MIN_SNAPSHOTS_FOR_QUARTER
@@ -886,19 +889,13 @@ def save_quarter_data(quarter_str: str, quarter_df: pd.DataFrame) -> None:
 
 def main() -> None:
     """Generate the financial dashboard data."""
-    with open("dashboard_debug.log", "w") as log:
-        log.write("Generating Financial Dashboard Data...\n")
-        print("Generating Financial Dashboard Data...")
+    logger.info("Generating Financial Dashboard Data...")
 
     # Load data
-    with open("dashboard_debug.log", "a") as log:
-        log.write("Fetching valuation data...\n")
-    print("Fetching valuation data...")
+    logger.info("Fetching valuation data...")
     valuation_df = get_valuation_data_with_sectors()
-    
-    with open("dashboard_debug.log", "a") as log:
-        log.write(f"Valuation DataFrame shape: {valuation_df.shape}\n")
-    print(f"Valuation DataFrame shape: {valuation_df.shape}")
+
+    logger.info(f"Valuation DataFrame shape: {valuation_df.shape}")
     
     if valuation_df.empty:
         print("ERROR: Valuation DataFrame is empty!")
