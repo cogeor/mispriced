@@ -55,6 +55,7 @@ from src.config.metrics import (
     get_metric_info,
     compute_mispricing,
 )
+from src.config.pipeline import MIN_SNAPSHOTS_FOR_QUARTER
 from src.valuation.size_correction import (
     apply_size_correction, 
     SizeCorrectionResult,
@@ -74,7 +75,7 @@ def get_available_quarters() -> List[datetime]:
         quarters = (
             session.query(ValuationResult.snapshot_timestamp)
             .group_by(ValuationResult.snapshot_timestamp)
-            .having(func.count(func.distinct(ValuationResult.ticker)) > 1000)
+            .having(func.count(func.distinct(ValuationResult.ticker)) >= MIN_SNAPSHOTS_FOR_QUARTER)
             .order_by(ValuationResult.snapshot_timestamp.desc())
             .all()
         )
@@ -128,7 +129,7 @@ def get_valuation_data_with_sectors(quarter_date: datetime = None) -> pd.DataFra
             latest = (
                 session.query(ValuationResult.snapshot_timestamp)
                 .group_by(ValuationResult.snapshot_timestamp)
-                .having(func.count(func.distinct(ValuationResult.ticker)) > 1000)
+                .having(func.count(func.distinct(ValuationResult.ticker)) >= MIN_SNAPSHOTS_FOR_QUARTER)
                 .order_by(ValuationResult.snapshot_timestamp.desc())
                 .first()
             )
@@ -276,7 +277,7 @@ def get_index_mispricing_timeseries() -> List[Dict[str, Any]]:
         ).group_by(
             ValuationResult.snapshot_timestamp
         ).having(
-            func.count(func.distinct(ValuationResult.ticker)) > 1000
+            func.count(func.distinct(ValuationResult.ticker)) >= MIN_SNAPSHOTS_FOR_QUARTER
         ).order_by(
             ValuationResult.snapshot_timestamp
         ).all()
@@ -366,7 +367,7 @@ def get_sector_mispricing_timeseries() -> List[Dict[str, Any]]:
         ).group_by(
             ValuationResult.snapshot_timestamp
         ).having(
-            func.count(func.distinct(ValuationResult.ticker)) > 1000
+            func.count(func.distinct(ValuationResult.ticker)) >= MIN_SNAPSHOTS_FOR_QUARTER
         ).order_by(
             ValuationResult.snapshot_timestamp
         ).all()

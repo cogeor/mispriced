@@ -42,17 +42,14 @@ from src.valuation.config import gbr_baseline_model
 from src.valuation.size_correction import estimate_size_coefficient, compute_residual_mispricing
 from src.valuation.currency_fix import normalize_snapshots
 from src.evaluation import SimpleRepeatedCV, DEFAULT_MODEL_PARAMS
-
-# Configuration
-MIN_SNAPSHOTS_FOR_QUARTER = 1000
-MIN_MARKET_CAP = 100e6  # $100M minimum
-MIN_SAMPLES_FOR_CV = 50
-N_CV_REPEATS = 10
-N_CV_FOLDS = 5
-
-# Critical features - stocks missing ALL of these are excluded
-# At least one financial metric is needed for a meaningful prediction
-CRITICAL_FEATURES = ["total_revenue", "net_income", "ebitda"]
+from src.config.pipeline import (
+    MIN_SNAPSHOTS_FOR_QUARTER,
+    MIN_MARKET_CAP,
+    MIN_SAMPLES_FOR_CV,
+    N_CV_REPEATS,
+    N_CV_FOLDS,
+    CRITICAL_FEATURES,
+)
 
 logging.basicConfig(
     level=logging.INFO,

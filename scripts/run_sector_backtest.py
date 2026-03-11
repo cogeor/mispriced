@@ -32,6 +32,7 @@ from src.backtest.signal_metrics import (
     compute_hit_rate,
     compute_long_short_returns,
 )
+from src.config.pipeline import MIN_SNAPSHOTS_FOR_QUARTER
 from sqlalchemy import func
 
 # Configure logging
@@ -47,18 +48,18 @@ OUTPUT_DIR = "data"
 
 
 def get_available_quarters(session) -> List[Tuple[date, int]]:
-    """Get quarters with substantial valuation data (>100 valuations)."""
+    """Get quarters with substantial valuation data."""
     quarters = session.query(
         ValuationResult.snapshot_timestamp,
         func.count(ValuationResult.ticker)
     ).group_by(
         ValuationResult.snapshot_timestamp
     ).having(
-        func.count(ValuationResult.ticker) > 100
+        func.count(ValuationResult.ticker) >= MIN_SNAPSHOTS_FOR_QUARTER
     ).order_by(
         ValuationResult.snapshot_timestamp
     ).all()
-    
+
     return [(q[0].date(), q[1]) for q in quarters]
 
 
