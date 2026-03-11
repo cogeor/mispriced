@@ -195,6 +195,71 @@
         #mobileControlBar {
             box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.5);
         }
+
+        /* Chart info tooltip button */
+        .chart-info-btn {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            border: 1px solid #4b5563;
+            background: rgba(55, 65, 81, 0.5);
+            color: #9ca3af;
+            font-size: 11px;
+            line-height: 1;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            transition: all 0.15s ease;
+        }
+        .chart-info-btn:hover {
+            background: rgba(59, 130, 246, 0.3);
+            border-color: #3b82f6;
+            color: #93c5fd;
+        }
+        .chart-info-btn-sm {
+            width: 14px;
+            height: 14px;
+            font-size: 9px;
+        }
+
+        /* Chart info tooltip panel */
+        #chartInfoTooltip {
+            position: fixed;
+            z-index: 9000;
+            background: rgba(17, 24, 39, 0.97);
+            border: 1px solid rgba(75, 85, 99, 0.7);
+            border-radius: 10px;
+            padding: 14px 16px;
+            max-width: 360px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(8px);
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(4px);
+            transition: opacity 0.15s ease, transform 0.15s ease;
+        }
+        #chartInfoTooltip.visible {
+            opacity: 1;
+            pointer-events: auto;
+            transform: translateY(0);
+        }
+        .cit-section { margin-bottom: 10px; }
+        .cit-section:last-child { margin-bottom: 0; }
+        .cit-label {
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #60a5fa;
+            margin-bottom: 3px;
+        }
+        .cit-text {
+            font-size: 12px;
+            line-height: 1.5;
+            color: #d1d5db;
+        }
     </style>
 </head>
 
@@ -348,6 +413,7 @@
         <div class="card p-4 h-[600px] flex flex-col relative">
             <div class="flex flex-row justify-between items-center mb-3 z-10">
                 <h3 class="text-lg font-bold text-white">Market Valuation Map</h3>
+                <button class="chart-info-btn" data-chart="valuationChart" aria-label="Chart info" title="About this chart">?</button>
             </div>
             <div id="valuationChart" class="flex-grow w-full rounded-lg bg-gray-900/30 border border-gray-800/50"></div>
         </div>
@@ -355,11 +421,17 @@
         <!-- Split Row: Sector & Index -->
         <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
             <div class="card p-4 h-[450px] flex flex-col">
-                <h3 class="text-base font-bold text-white mb-3">Sector Mispricing</h3>
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-base font-bold text-white">Sector Mispricing</h3>
+                    <button class="chart-info-btn" data-chart="sectorChart" aria-label="Chart info" title="About this chart">?</button>
+                </div>
                 <div id="sectorChart" class="flex-grow rounded-lg bg-gray-900/30"></div>
             </div>
             <div class="card p-4 h-[450px] flex flex-col">
-                <h3 class="text-base font-bold text-white mb-3">Index Mispricing</h3>
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-base font-bold text-white">Index Mispricing</h3>
+                    <button class="chart-info-btn" data-chart="indexChart" aria-label="Chart info" title="About this chart">?</button>
+                </div>
                 <div id="indexChart" class="flex-grow rounded-lg bg-gray-900/30"></div>
             </div>
         </div>
@@ -368,7 +440,10 @@
         <div class="card p-4 h-[420px] flex flex-col">
             <div class="flex justify-between items-center mb-2">
                 <h3 class="text-base font-bold text-white">Sector Mispricing History</h3>
-                <span class="text-xs text-gray-500">Click legend to toggle • Double-click to isolate</span>
+                <div class="flex items-center gap-2">
+                    <span class="text-xs text-gray-500">Click legend to toggle • Double-click to isolate</span>
+                    <button class="chart-info-btn" data-chart="sectorTimeSeriesChart" aria-label="Chart info" title="About this chart">?</button>
+                </div>
             </div>
             <div id="sectorTimeSeriesChart" class="flex-grow rounded-lg bg-gray-900/30"></div>
         </div>
@@ -376,7 +451,10 @@
         <div class="card p-4 h-[420px] flex flex-col">
             <div class="flex justify-between items-center mb-2">
                 <h3 class="text-base font-bold text-white">Index Mispricing History</h3>
-                <span class="text-xs text-gray-500">Click legend to toggle • Double-click to isolate</span>
+                <div class="flex items-center gap-2">
+                    <span class="text-xs text-gray-500">Click legend to toggle • Double-click to isolate</span>
+                    <button class="chart-info-btn" data-chart="indexTimeSeriesChart" aria-label="Chart info" title="About this chart">?</button>
+                </div>
             </div>
             <div id="indexTimeSeriesChart" class="flex-grow rounded-lg bg-gray-900/30"></div>
         </div>
@@ -393,13 +471,17 @@
             <!-- Sector Signal Analysis -->
             <div class="grid grid-cols-1 xl:grid-cols-[2fr_1fr] gap-4 mb-6">
                 <div class="h-[350px] flex flex-col">
-                    <h4 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Sector IC by Horizon
-                    </h4>
+                    <div class="flex items-center justify-between mb-2">
+                        <h4 class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Sector IC by Horizon</h4>
+                        <button class="chart-info-btn chart-info-btn-sm" data-chart="icSectorChart" aria-label="Chart info" title="About this chart">?</button>
+                    </div>
                     <div id="icSectorChart" class="flex-grow rounded-lg bg-gray-900/30 border border-gray-800/50"></div>
                 </div>
                 <div class="h-[350px] flex flex-col">
-                    <h4 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Sector Signal Decay
-                    </h4>
+                    <div class="flex items-center justify-between mb-2">
+                        <h4 class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Sector Signal Decay</h4>
+                        <button class="chart-info-btn chart-info-btn-sm" data-chart="icSectorDecayChart" aria-label="Chart info" title="About this chart">?</button>
+                    </div>
                     <div id="icSectorDecayChart" class="flex-grow rounded-lg bg-gray-900/30 border border-gray-800/50">
                     </div>
                 </div>
@@ -408,13 +490,17 @@
             <!-- Index Signal Analysis -->
             <div class="grid grid-cols-1 xl:grid-cols-[2fr_1fr] gap-4">
                 <div class="h-[350px] flex flex-col">
-                    <h4 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Index IC by Horizon
-                    </h4>
+                    <div class="flex items-center justify-between mb-2">
+                        <h4 class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Index IC by Horizon</h4>
+                        <button class="chart-info-btn chart-info-btn-sm" data-chart="icIndexChart" aria-label="Chart info" title="About this chart">?</button>
+                    </div>
                     <div id="icIndexChart" class="flex-grow rounded-lg bg-gray-900/30 border border-gray-800/50"></div>
                 </div>
                 <div class="h-[350px] flex flex-col">
-                    <h4 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Index Signal Decay
-                    </h4>
+                    <div class="flex items-center justify-between mb-2">
+                        <h4 class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Index Signal Decay</h4>
+                        <button class="chart-info-btn chart-info-btn-sm" data-chart="icIndexDecayChart" aria-label="Chart info" title="About this chart">?</button>
+                    </div>
                     <div id="icIndexDecayChart" class="flex-grow rounded-lg bg-gray-900/30 border border-gray-800/50">
                     </div>
                 </div>
@@ -424,11 +510,17 @@
         <!-- Uncertainty & Size Premium -->
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <div class="card p-4 h-[400px] flex flex-col">
-                <h3 class="text-base font-bold text-white mb-3">Model Uncertainty vs Error</h3>
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-base font-bold text-white">Model Uncertainty vs Error</h3>
+                    <button class="chart-info-btn" data-chart="uncertaintyChart" aria-label="Chart info" title="About this chart">?</button>
+                </div>
                 <div id="uncertaintyChart" class="flex-grow rounded-lg bg-gray-900/30"></div>
             </div>
             <div class="card p-4 h-[400px] flex flex-col">
-                <h3 class="text-base font-bold text-white mb-3">Size Premium Trend</h3>
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-base font-bold text-white">Size Premium Trend</h3>
+                    <button class="chart-info-btn" data-chart="sizePremiumChart" aria-label="Chart info" title="About this chart">?</button>
+                </div>
                 <div id="sizePremiumChart" class="flex-grow rounded-lg bg-gray-900/30"></div>
             </div>
         </div>
@@ -482,6 +574,9 @@
             </div>
         </div>
     </div>
+
+    <!-- Chart info tooltip (shared, positioned by JS) -->
+    <div id="chartInfoTooltip"></div>
 
     <script type="module" src="/src/main.ts"></script>
 </body>

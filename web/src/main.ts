@@ -5,6 +5,7 @@ import { renderValuationMap } from './charts/valuationMap';
 import { renderIndexChart, renderIndexTimeSeriesMulti, renderSectorTimeSeriesMulti } from './charts/indexCharts';
 import { buildICHeatmap, renderSignalDecay, type HorizonDecayItem } from './charts/signalQuality';
 import { renderSectorChart, renderUncertaintyChart, renderSizePremiumChart } from './charts/miscCharts';
+import { setupChartInfoTooltips } from './chartTooltip';
 
 // Dashboard data assembled from split files
 let dashboardData: DashboardData | null = null;
@@ -70,6 +71,7 @@ async function init(): Promise<void> {
 
     // Setup event listeners early
     setupEventListeners();
+    setupChartInfoTooltips();
 
     try {
         // PHASE 1: Load core data (~35KB) - fast, enables header + basic charts
