@@ -41,13 +41,25 @@ export function buildICHeatmap(
             const totalObs = itemsAtHorizon.reduce((sum, d) => sum + d.n_obs, 0);
             const weightedIC = itemsAtHorizon.reduce((sum, d) => sum + d.ic * d.n_obs, 0) / totalObs;
             const weightedHitRate = itemsAtHorizon.reduce((sum, d) => sum + d.hit_rate * d.n_obs, 0) / totalObs;
-            // Combine p-values using Fisher's method approximation (use min for simplicity)
-            const minPval = Math.min(...itemsAtHorizon.map(d => d.pval));
+            // Combine p-values using Fisher's method:
+            // chi2 = -2 * sum(ln(p_i)), with 2k degrees of freedom
+            // Approximated via chi-squared survival function
+            const pvals = itemsAtHorizon.map(d => d.pval).filter(p => p > 0 && p <= 1);
+            let combinedPval = 1.0;
+            if (pvals.length > 0) {
+                const chi2 = -2 * pvals.reduce((s, p) => s + Math.log(p), 0);
+                const df = 2 * pvals.length;
+                // Regularized incomplete gamma function approximation for chi2 survival
+                // For large df, use normal approximation: Z = sqrt(2*chi2) - sqrt(2*df - 1)
+                const z = Math.sqrt(2 * chi2) - Math.sqrt(2 * df - 1);
+                combinedPval = 0.5 * (1 - Math.tanh(z * 0.7071068)); // erfc approximation
+                combinedPval = Math.max(0, Math.min(1, combinedPval));
+            }
             return {
                 name: 'Global',
                 horizon: h,
                 ic: weightedIC,
-                pval: minPval,
+                pval: combinedPval,
                 n_obs: totalObs,
                 spread: 0,
                 hit_rate: weightedHitRate,

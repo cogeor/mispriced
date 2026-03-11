@@ -260,10 +260,27 @@ def main():
         results_df = pd.DataFrame(all_results)
         
         # Aggregate across quarters
+        # Note: p-values are combined using Fisher's method (not averaged)
+        from scipy.stats import combine_pvalues as _combine_pvalues
+
+        def _fisher_combined_pvalue(pvals: pd.Series) -> float:
+            """Combine p-values using Fisher's method."""
+            valid = pvals.dropna()
+            valid = valid[valid > 0]  # filter out exact zeros
+            if len(valid) < 1:
+                return 1.0
+            if len(valid) == 1:
+                return float(valid.iloc[0])
+            try:
+                _, combined_p = _combine_pvalues(valid.values, method="fisher")
+                return float(combined_p)
+            except Exception:
+                return float(valid.mean())
+
         summary = results_df.groupby(["metric", "group_type", "group_name", "horizon"]).agg({
             "n_obs": "sum",
             "ic": "mean",
-            "ic_pval": "mean",
+            "ic_pval": _fisher_combined_pvalue,
             "q1_return": "mean",
             "q5_return": "mean",
             "spread": "mean",
