@@ -45,9 +45,10 @@ def build_feature_matrix(
 
         # Apply Transforms (before fill to avoid log(0))
         if spec.transform == "log":
-            # Use log1p for safety: log(1 + x)
-            # Clip negative values to 0 before transform
-            col_data = np.log1p(col_data.clip(lower=0))
+            # Sign-preserving log: sign(x) * log1p(|x|)
+            # This ensures negative values (e.g., net losses) are distinguishable
+            # from zero, unlike the previous clip(lower=0) approach.
+            col_data = np.sign(col_data) * np.log1p(np.abs(col_data))
         elif spec.transform == "sqrt":
             col_data = np.sqrt(col_data.clip(lower=0))
 

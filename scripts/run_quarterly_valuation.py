@@ -280,8 +280,9 @@ def run_valuation_for_quarter(
     pred_log_std = results["std"]
 
     # Convert mean prediction back to linear space
-    # For log-normal: E[X] = exp(mu + sigma^2/2), but we use simple exp(mean) for point estimate
-    pred_mcap = np.exp(pred_log_mean)
+    # For log-normal: E[X] = exp(mu + sigma^2/2)
+    # This corrects for Jensen's inequality (exp(E[log X]) < E[X])
+    pred_mcap = np.exp(pred_log_mean + 0.5 * pred_log_std**2)
 
     # For std in linear space, use delta method approximation: std_linear ≈ exp(mu) * std_log
     pred_mcap_std = pred_mcap * pred_log_std
