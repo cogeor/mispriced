@@ -136,8 +136,8 @@ This provides a lower bound on index uncertainty.
 | Region | Indices |
 |--------|---------|
 | **US** | S&P 500, NASDAQ 100, S&P 400 (Mid Cap), S&P 600 (Small Cap), Russell 1000 |
-| **Europe** | DAX (Germany), FTSE 100 (UK), Euro Stoxx 50, CAC 40 (France), SMI (Switzerland) |
-| **Asia** | Nifty 50 (India), SSE 50 (China) |
+| **Europe** | DAX (Germany), FTSE 100 (UK), CAC 40 (France), SMI (Switzerland) |
+| **Asia** | Nifty 50 (India), SSE 50 (China), Hang Seng (Hong Kong) |
 
 All indices sourced from Wikipedia and mapped to yfinance ticker format.
 
