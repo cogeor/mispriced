@@ -134,7 +134,11 @@ def load_quarter_data(
     # This prevents using very old data for dead tickers.
     cutoff_stale = quarter_date - pd.Timedelta(days=100)
     stmt = stmt.filter(FinancialSnapshot.snapshot_timestamp >= cutoff_stale)
-    
+
+    # Currency-validation gate: exclude rows whose monetary fields aren't
+    # confirmed USD. See alembic revision b2f9a4d6e7c1.
+    stmt = stmt.filter(FinancialSnapshot.currency_validated.is_(True))
+
     subq = stmt.group_by(FinancialSnapshot.ticker).subquery()
 
     # Main query joining back to get full row

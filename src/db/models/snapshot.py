@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, Numeric, Date, DateTime, JSON, ForeignKey, func, Index
+from sqlalchemy import Column, String, Integer, Numeric, Boolean, Date, DateTime, JSON, ForeignKey, func, Index
 from sqlalchemy.orm import relationship
 from .base import Base
 
@@ -18,6 +18,10 @@ class FinancialSnapshot(Base):
     original_currency = Column(String(10), nullable=False)
     stored_currency = Column(String(10), nullable=False)
     fx_rate_to_usd = Column(Numeric)
+    # False when monetary fields are NOT verified to be in USD (e.g. FX
+    # provider failed at ingestion, GBp/financialCurrency yfinance quirks).
+    # Downstream consumers must exclude these rows or treat them as suspect.
+    currency_validated = Column(Boolean, nullable=False, server_default="1")
     
     # Financials
     total_revenue = Column(Numeric)

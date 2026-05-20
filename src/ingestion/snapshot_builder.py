@@ -83,6 +83,9 @@ class SnapshotBuilder:
             original_currency=original_currency,
             stored_currency=stored_currency,
             fx_rate_to_usd=fx_rate,
+            currency_validated=_is_currency_validated(
+                original_currency, stored_currency, fx_rate
+            ),
             # Price context
             price_t0=price_context.get("t0"),
             price_t_minus_1=price_context.get("t-1"),
@@ -207,7 +210,28 @@ class SnapshotBuilder:
             else:
                 converted[key] = value
 
-        # We return the trading FX rate as the primary "fx_rate_to_usd" 
+        # We return the trading FX rate as the primary "fx_rate_to_usd"
         # because the Snapshot's 'original_currency' is typically the trading currency.
         # Ideally we'd store both, but schema has one. Trading makes sense for Price reference.
-        return converted, "USD", trading_fx
+        stored_currency = "USD" if trading_fx is not None else trading_currency
+        return converted, stored_currency, trading_fx
+
+
+# UK GBp tickers have a yfinance source-dependency quirk that single-rate
+# conversion can't correctly resolve: info["marketCap"] is in GBP but
+# info["totalRevenue"] is in GBp pence, while DataFrame financials are in
+# GBP. Until a source-aware mapper exists, GBp snapshots are not trustable.
+_CURRENCY_VALIDATION_DENYLIST = {"GBp"}
+
+
+def _is_currency_validated(
+    original_currency: str,
+    stored_currency: str,
+    fx_rate: Optional[float],
+) -> bool:
+    """True iff the snapshot's monetary fields are confirmed USD."""
+    if original_currency in _CURRENCY_VALIDATION_DENYLIST:
+        return False
+    if original_currency == "USD":
+        return True
+    return stored_currency == "USD" and fx_rate is not None
