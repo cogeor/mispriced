@@ -169,6 +169,9 @@ def get_valuation_data_with_sectors(quarter_date: datetime = None) -> pd.DataFra
             ValuationResult.relative_error,
             ValuationResult.residual_error,
             ValuationResult.relative_std,
+            ValuationResult.predicted_mcap_lo,
+            ValuationResult.predicted_mcap_hi,
+            ValuationResult.conformal_alpha,
             ValuationResult.snapshot_timestamp,
             Ticker.sector,
             Ticker.company_name,
@@ -211,6 +214,9 @@ def get_valuation_data_with_sectors(quarter_date: datetime = None) -> pd.DataFra
 
         df["predicted_mcap_mean"] = pd.to_numeric(df["predicted_mcap_mean"], errors="coerce")
         df["actual_mcap"] = pd.to_numeric(df["actual_mcap"], errors="coerce")
+        df["predicted_mcap_lo"] = pd.to_numeric(df["predicted_mcap_lo"], errors="coerce")
+        df["predicted_mcap_hi"] = pd.to_numeric(df["predicted_mcap_hi"], errors="coerce")
+        df["conformal_alpha"] = pd.to_numeric(df["conformal_alpha"], errors="coerce")
 
         # Currency conversion: convert non-USD values to USD
         # Prefer stored_currency from FinancialSnapshot, fallback to Ticker.original_currency if NULL
@@ -223,7 +229,12 @@ def get_valuation_data_with_sectors(quarter_date: datetime = None) -> pd.DataFra
         # Convert both actual and predicted to USD
         df.loc[needs_fx, "actual_mcap"] = df.loc[needs_fx, "actual_mcap"] * df.loc[needs_fx, "fx_rate"]
         df.loc[needs_fx, "predicted_mcap_mean"] = df.loc[needs_fx, "predicted_mcap_mean"] * df.loc[needs_fx, "fx_rate"]
-        
+        # CQR prediction interval bounds share the same currency as predicted_mcap_mean,
+        # so they need the same FX scaling. conformal_alpha is a unit-less probability
+        # target and is NOT FX-converted.
+        df.loc[needs_fx, "predicted_mcap_lo"] = df.loc[needs_fx, "predicted_mcap_lo"] * df.loc[needs_fx, "fx_rate"]
+        df.loc[needs_fx, "predicted_mcap_hi"] = df.loc[needs_fx, "predicted_mcap_hi"] * df.loc[needs_fx, "fx_rate"]
+
         print(f"  Applied FX conversion to {needs_fx.sum()} non-USD stocks")
 
         # Recalculate relative_error with USD-normalized mcaps
@@ -497,6 +508,82 @@ def get_per_quarter_size_coefficients() -> List[Dict[str, Any]]:
     finally:
         session.close()
 
+def compute_coverage_diagnostic() -> List[Dict[str, Any]]:
+    """
+    Per-quarter empirical coverage diagnostic for CQR intervals.
+
+    For each quarter that has at least one ValuationResult row with non-NULL
+    predicted_mcap_lo, compute the fraction of rows whose actual_mcap falls
+    inside [predicted_mcap_lo, predicted_mcap_hi]. Quarters with zero
+    non-NULL rows are omitted (NOT returned as 0%).
+
+    FX conversion: comparison is done in the raw stored currency. Since lo,
+    hi, and actual_mcap all share the same per-row currency in the DB, the
+    USD conversion would cancel out and is unnecessary here.
+
+    Returns:
+        List of dicts, one per quarter, sorted ascending by quarter:
+            {
+                "quarter": "2026-03-31",
+                "nominal": 0.9,         # 1 - alpha
+                "empirical": 0.8998,    # in [0,1]
+                "n": 3763,
+                "alpha": 0.1,
+            }
+    """
+    session = SessionLocal()
+    try:
+        query = session.query(
+            ValuationResult.snapshot_timestamp,
+            ValuationResult.actual_mcap,
+            ValuationResult.predicted_mcap_lo,
+            ValuationResult.predicted_mcap_hi,
+            ValuationResult.conformal_alpha,
+        ).filter(
+            ValuationResult.predicted_mcap_lo.isnot(None),
+            ValuationResult.predicted_mcap_hi.isnot(None),
+        )
+        df = pd.read_sql(query.statement, session.bind)
+    finally:
+        session.close()
+
+    if df.empty:
+        return []
+
+    df["actual_mcap"] = pd.to_numeric(df["actual_mcap"], errors="coerce")
+    df["predicted_mcap_lo"] = pd.to_numeric(df["predicted_mcap_lo"], errors="coerce")
+    df["predicted_mcap_hi"] = pd.to_numeric(df["predicted_mcap_hi"], errors="coerce")
+    df["conformal_alpha"] = pd.to_numeric(df["conformal_alpha"], errors="coerce")
+    df = df.dropna(subset=["actual_mcap", "predicted_mcap_lo", "predicted_mcap_hi"])
+
+    results: List[Dict[str, Any]] = []
+    for quarter, qdf in df.groupby("snapshot_timestamp"):
+        inside = (
+            (qdf["actual_mcap"] >= qdf["predicted_mcap_lo"])
+            & (qdf["actual_mcap"] <= qdf["predicted_mcap_hi"])
+        )
+        n = int(len(qdf))
+        if n == 0:
+            continue
+        # alpha may vary by quarter in theory; use the modal value
+        alpha_mode = (
+            float(qdf["conformal_alpha"].mode().iloc[0])
+            if qdf["conformal_alpha"].notna().any()
+            else float("nan")
+        )
+        q_str = quarter.strftime("%Y-%m-%d") if hasattr(quarter, "strftime") else str(quarter)[:10]
+        results.append({
+            "quarter": q_str,
+            "nominal": float(1.0 - alpha_mode) if np.isfinite(alpha_mode) else None,
+            "empirical": float(inside.mean()),
+            "n": n,
+            "alpha": float(alpha_mode) if np.isfinite(alpha_mode) else None,
+        })
+
+    results.sort(key=lambda r: r["quarter"])
+    return results
+
+
 def get_backtest_data() -> Dict[str, Any]:
     """Load backtest detailed data for time-series IC visualization."""
     detailed_path = "data/signal_backtest_detailed.csv"
@@ -766,6 +853,13 @@ def build_scatter_data(
         mispricing = float(row["relative_error"])
         residual_mispricing = float(row["residual_error"]) if pd.notna(row["residual_error"]) else mispricing
         rel_std = float(row["relative_std"]) if pd.notna(row["relative_std"]) else 0.0
+        # CQR prediction interval bounds (in $B, FX-normalized) and the conformal
+        # alpha (unit-less). Null when the source DB row has NULL (i.e. quarters
+        # that have not yet been backfilled with CQR). Use row.get(...) defensively
+        # so DataFrames stripped of these columns don't trigger KeyError.
+        pred_lo_b = float(row["predicted_mcap_lo"]) / 1e9 if pd.notna(row.get("predicted_mcap_lo")) else None
+        pred_hi_b = float(row["predicted_mcap_hi"]) / 1e9 if pd.notna(row.get("predicted_mcap_hi")) else None
+        conformal_alpha = float(row["conformal_alpha"]) if pd.notna(row.get("conformal_alpha")) else None
         sector = row["sector"] if row["sector"] else "Unknown"
 
         scatter_data.append({
@@ -775,6 +869,9 @@ def build_scatter_data(
             "mispricing": mispricing,
             "residualMispricing": residual_mispricing,
             "relStd": rel_std,
+            "predicted_lo": pred_lo_b,
+            "predicted_hi": pred_hi_b,
+            "conformalAlpha": conformal_alpha,
             "mispricingPct": f"{mispricing*100:.1f}%",
             "residualMispricingPct": f"{residual_mispricing*100:.1f}%",
             "sector": sector,
@@ -815,6 +912,7 @@ def build_and_save_dashboard_data(
     size_correction: Optional[SizeCorrectionResult] = None,
     size_coefficients: List[Dict[str, Any]] = None,
     available_quarters: List[str] = None,
+    coverage_diagnostic: List[Dict[str, Any]] = None,
 ) -> None:
     """Build dashboard data dictionary and save to JSON.
 
@@ -887,6 +985,7 @@ def build_and_save_dashboard_data(
         "size_correction_model": size_correction_model,
         "size_coefficients": size_coefficients,
         "available_quarters": available_quarters or [],
+        "coverage_diagnostic": coverage_diagnostic or [],
     }
     core_path = os.path.join(output_dir, "core.json")
     with open(core_path, "w", encoding="utf-8") as f:
@@ -925,6 +1024,7 @@ def build_and_save_dashboard_data(
         "size_correction_model": size_correction_model,
         "size_coefficients": size_coefficients,
         "available_quarters": available_quarters or [],
+        "coverage_diagnostic": coverage_diagnostic or [],
     }
     legacy_path = os.path.join(output_dir, "dashboard_data.json")
     with open(legacy_path, "w", encoding="utf-8") as f:
@@ -1003,6 +1103,11 @@ def main() -> None:
     size_coefficients = get_per_quarter_size_coefficients()
     print(f"    Loaded {len(size_coefficients)} quarters with coefficients")
 
+    # CQR per-quarter empirical coverage diagnostic
+    print("  Computing CQR coverage diagnostic...")
+    coverage_diagnostic = compute_coverage_diagnostic()
+    print(f"    {len(coverage_diagnostic)} quarter(s) with CQR data")
+
     # Compute stats
     stats = compute_summary_stats(valuation_df, index_data, size_correction)
 
@@ -1029,6 +1134,7 @@ def main() -> None:
         size_correction,
         size_coefficients,
         quarter_strings,
+        coverage_diagnostic,
     )
 
 if __name__ == "__main__":

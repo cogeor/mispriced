@@ -21,6 +21,14 @@ export interface ScatterPoint {
     mispricing: number;
     residualMispricing: number;
     relStd: number;
+    // CQR prediction interval bounds in $B, FX-normalized. Null/absent when
+    // the source DB row's predicted_mcap_lo/hi is NULL (i.e. quarters not yet
+    // backfilled with CQR). conformalAlpha is the nominal miscoverage rate
+    // (typically 0.1 → 90% nominal coverage). Loop 04 surfaces these; loop 05
+    // renders them; loop 06 backfills the remaining 8 quarters.
+    predicted_lo?: number | null;
+    predicted_hi?: number | null;
+    conformalAlpha?: number | null;
     mispricingPct: string;
     residualMispricingPct: string;
     sector: string;
@@ -115,6 +123,17 @@ export interface SizeCoefficient {
     nObs: number;
 }
 
+// Per-quarter empirical coverage diagnostic for CQR prediction intervals.
+// nominal/alpha are nullable to match the Python-side guard when a quarter's
+// rows all have NULL conformal_alpha (defensive — should not occur in practice).
+export interface CoveragePoint {
+    quarter: string;
+    nominal: number | null;
+    empirical: number;
+    n: number;
+    alpha: number | null;
+}
+
 export interface QuarterValuationData {
     scatter_data: ScatterPoint[];
     sector_breakdown: SectorBreakdownItem[];
@@ -139,6 +158,7 @@ export interface DashboardData {
     size_coefficients: SizeCoefficient[];
     available_quarters: string[];  // List of available quarters for lazy loading
     size_correction_model?: SizeCorrectionModel; // Quadratic model coefficients
+    coverage_diagnostic?: CoveragePoint[]; // Per-quarter empirical CQR coverage (loop 04+)
 }
 
 // Split data types for progressive loading
@@ -153,6 +173,7 @@ export interface CoreData {
     size_coefficients: SizeCoefficient[];
     available_quarters: string[];
     size_correction_model?: SizeCorrectionModel;
+    coverage_diagnostic?: CoveragePoint[]; // Per-quarter empirical CQR coverage (loop 04+)
 }
 
 export interface ScatterData {
