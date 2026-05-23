@@ -522,6 +522,57 @@ objective: reg:absoluteerror
                     because market regimes shift. Quarters not yet re-run with CQR will show as
                     <em>&mdash;</em> in the table above until the backfill completes.
                 </p>
+
+                <h4 class="font-semibold text-gray-200 mt-6">Conditional Coverage by Market Cap</h4>
+                <p class="text-sm text-gray-400">
+                    The 90% empirical coverage above is a <em>marginal</em> guarantee &mdash; pooled across
+                    all stocks. Coverage <em>conditional</em> on market cap is much less uniform.
+                    On the latest quarter (2026-03-31, n=3055):
+                </p>
+
+                <div class="overflow-x-auto mt-3">
+                    <table class="feature-table w-full text-sm">
+                        <thead>
+                            <tr class="text-left text-gray-400">
+                                <th>Market cap bucket</th>
+                                <th>n</th>
+                                <th>Empirical coverage</th>
+                                <th>Median width (hi&thinsp;/&thinsp;lo)</th>
+                            </tr>
+                        </thead>
+                        <tbody class="text-gray-300">
+                            <tr><td>$0&ndash;1B</td><td>517</td><td class="text-amber-300">96.3%</td><td>13.8&times;</td></tr>
+                            <tr><td>$1&ndash;5B</td><td>1,061</td><td class="text-amber-300">93.8%</td><td>14.0&times;</td></tr>
+                            <tr><td>$5&ndash;20B</td><td>766</td><td>88.3%</td><td>11.3&times;</td></tr>
+                            <tr><td>$20&ndash;100B</td><td>513</td><td>87.9%</td><td>8.6&times;</td></tr>
+                            <tr><td>$100&ndash;500B</td><td>175</td><td class="text-amber-300">72.0%</td><td>8.8&times;</td></tr>
+                            <tr><td>$500B&ndash;5T</td><td>22</td><td class="text-red-400">36.4%</td><td>16.0&times;</td></tr>
+                            <tr><td>$5T+</td><td>1</td><td class="text-red-400">0.0%</td><td>5.8&times;</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <p class="text-xs text-gray-500 mt-3">
+                    A single global calibration constant gets inflated by tail residuals
+                    (mega-cap misses driven by intangibles the books don't capture), which over-covers
+                    the small-cap bucket and still leaves the large-cap bucket badly under-covered.
+                    Median band widths of 8&ndash;16&times; <code>hi/lo</code> at the tails reflect a real
+                    property of the data &mdash; fundamentals do not pin down log(mcap) for large companies &mdash;
+                    rather than a pipeline defect. This <em>is</em> the intangibles-premium claim, quantified
+                    one more way.
+                </p>
+
+                <p class="text-xs text-gray-500 mt-3">
+                    <strong>Why the per-stock tooltip does not show this interval.</strong>
+                    Because conditional coverage is uneven and the bands at the tails are too wide to be
+                    informative per-stock, the valuation-map tooltip displays
+                    <strong>Model stability</strong> &mdash; the std of the point prediction across CV folds,
+                    as a fraction of actual market cap. Model stability is <em>not</em> a coverage statement;
+                    it is fold-disagreement, which under the dashboard&rsquo;s framing
+                    (&ldquo;what does a book-fundamentals model say is fair?&rdquo;) is the more
+                    interpretable per-stock metric. The CQR intervals are retained on the methodology page
+                    as a calibration diagnostic, not a per-stock display.
+                </p>
             </div>
 
             <script>
