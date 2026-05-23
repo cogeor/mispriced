@@ -11,11 +11,18 @@ class ValuationResult(Base):
     
     # Prediction outputs
     predicted_mcap_mean = Column(Numeric, nullable=False)
+    # DEPRECATED: kept for backwards-compat (existing rows). Use predicted_mcap_lo/hi (CQR) for uncertainty.
     predicted_mcap_std = Column(Numeric, nullable=False)
     actual_mcap = Column(Numeric, nullable=False)
     relative_error = Column(Numeric, nullable=False)  # Raw mispricing
     residual_error = Column(Numeric, nullable=True)   # Size-corrected mispricing (nullable for backfill)
     relative_std = Column(Numeric, nullable=False)
+
+    # CQR (Conformalized Quantile Regression) 90% prediction interval bounds in raw mcap space.
+    # Populated by run_cv_plus_cqr in src/valuation/conformal.py; NULL on rows predating loop 02.
+    predicted_mcap_lo = Column(Numeric, nullable=True)
+    predicted_mcap_hi = Column(Numeric, nullable=True)
+    conformal_alpha = Column(Numeric, nullable=True)  # e.g. 0.1 for a 90% interval
     
     # Model metadata
     model_config_hash = Column(String(64))
