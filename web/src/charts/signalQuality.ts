@@ -1,6 +1,6 @@
 import Plotly from 'plotly.js-dist-min';
 import type { BacktestItem } from '../types';
-import { getSignificanceStars, applyBHCorrection } from '../utils';
+import { getSignificanceStars } from '../utils';
 import { IC_COPY } from '../config';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -31,8 +31,10 @@ export function buildICHeatmap(
         return;
     }
 
-    // Apply Benjamini-Hochberg correction to p-values
-    filtered = applyBHCorrection(filtered);
+    // BH correction is applied server-side during dashboard JSON
+    // generation (see scripts/generate_dashboard.py). Use pval_adj when
+    // present, fall back to raw pval for older JSON payloads.
+    const pAdj = (item: BacktestItem): number => item.pval_adj ?? item.pval;
 
     // Compute Global by averaging across all names for each horizon (weighted by n_obs)
     if (addGlobal) {
@@ -91,9 +93,13 @@ export function buildICHeatmap(
             if (item) {
                 // Display raw Spearman IC. Sign follows the convention: signal_raw > 0 = undervalued.
                 rowZ.push(item.ic);
-                const sig = item.pval < 0.05 ? '★' : '';
+                const sig = pAdj(item) < 0.05 ? '★' : '';
                 const hitPct = item.hit_rate ? `${(item.hit_rate * 100).toFixed(1)}%` : 'N/A';
-                const txt = `<b>${item.name} (${h}d)</b><br>IC: ${(item.ic * 100).toFixed(1)}%${sig}<br>Hit Rate: ${hitPct}<br>N: ${item.n_obs}<br>p-val: ${item.pval.toExponential(1)}<br><i>${IC_COPY.tooltipPhrase}</i>`;
+                const adj = item.pval_adj ?? item.pval;
+                const pStr = item.pval_adj !== undefined
+                    ? `p: ${item.pval.toExponential(1)} (adj ${adj.toExponential(1)})`
+                    : `p: ${item.pval.toExponential(1)}`;
+                const txt = `<b>${item.name} (${h}d)</b><br>IC: ${(item.ic * 100).toFixed(1)}%${sig}<br>Hit Rate: ${hitPct}<br>N: ${item.n_obs}<br>${pStr}<br><i>${IC_COPY.tooltipPhrase}</i>`;
                 rowText.push(txt);
             } else {
                 rowZ.push(NaN);
@@ -136,7 +142,7 @@ export function buildICHeatmap(
             const item = filtered.find(d => d.name === name && d.horizon === h);
             if (item) {
                 const icPct = (item.ic * 100).toFixed(1);
-                const sig = getSignificanceStars(item.pval);
+                const sig = getSignificanceStars(pAdj(item));
                 const sigText = sig ? '\n' + sig : '';
                 annotations.push({
                     x: `${h}`,

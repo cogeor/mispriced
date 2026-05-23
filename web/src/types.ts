@@ -57,6 +57,7 @@ export interface BacktestItem {
     horizon: number;
     ic: number;
     pval: number;
+    pval_adj?: number;   // BH-adjusted p-value, per (metric, horizon[, quarter]) cohort, computed server-side. Falls back to pval when absent.
     n_obs: number;
     spread: number;
     hit_rate: number;

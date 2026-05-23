@@ -553,8 +553,17 @@ objective: reg:absoluteerror
 
                 <h3 class="font-semibold text-gray-200 mt-6">Statistical Significance</h3>
                 <p class="text-sm text-gray-400">
-                    P-values are corrected using the <strong>Benjamini-Hochberg procedure</strong> to control
-                    false discovery rate when testing multiple hypotheses (horizons x sectors/indices).
+                    P-values are corrected using the <strong>Benjamini-Hochberg
+                    procedure</strong> to control the false discovery rate across the
+                    multiple cells of each heatmap. The correction is applied
+                    <strong>server-side</strong> during dashboard JSON generation:
+                    each <code>(metric, horizon)</code> cohort (one column of one
+                    heatmap, ~33 sector or index cells) is adjusted independently,
+                    and the per-quarter scatter points are adjusted within their own
+                    <code>(metric, horizon, quarter)</code> cohorts. The dashboard
+                    reads the adjusted p-value (<code>pval_adj</code>) directly; the
+                    star annotations and the "significant" flag both reflect the
+                    adjusted value, not the raw one.
                 </p>
 
                 <div class="bg-gray-800/50 rounded-lg p-4 mt-3">

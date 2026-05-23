@@ -33,6 +33,11 @@ export function getSignificanceStars(pval: number): string {
 /**
  * Apply Benjamini-Hochberg FDR correction to p-values.
  * Returns a new array with adjusted p-values in the same order.
+ *
+ * @deprecated Primary BH correction is now performed server-side in
+ * scripts/generate_dashboard.py and surfaced as `pval_adj` on each
+ * BacktestItem. Kept as a fallback for ad-hoc client-side cohorts
+ * (e.g. quarter-aggregated views the backend doesn't pre-compute).
  */
 export function benjaminiHochberg(pvals: number[]): number[] {
     const n = pvals.length;
@@ -64,6 +69,11 @@ export function benjaminiHochberg(pvals: number[]): number[] {
 
 /**
  * Apply BH correction to BacktestItem array, returning new array with corrected pvals.
+ *
+ * @deprecated Primary BH correction is now performed server-side in
+ * scripts/generate_dashboard.py and surfaced as `pval_adj` on each
+ * BacktestItem. Prefer reading `item.pval_adj ?? item.pval` directly.
+ * Kept for ad-hoc client-side cohorts the backend doesn't pre-compute.
  */
 export function applyBHCorrection(items: BacktestItem[]): BacktestItem[] {
     if (items.length === 0) return [];

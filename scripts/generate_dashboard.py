@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 import numpy as np
+from scipy.stats import false_discovery_control
 
 logger = logging.getLogger(__name__)
 
@@ -504,6 +505,37 @@ def get_backtest_data() -> Dict[str, Any]:
 
     df = pd.read_csv(detailed_path)
 
+    def _attach_pval_adj(items: List[Dict], cohort_keys: List[str]) -> None:
+        """Mutate items in place, adding `pval_adj` per cohort.
+
+        BH is applied per cohort (items grouped by tuple(item[k] for k in
+        cohort_keys)). Items with a non-finite or out-of-range pval get
+        pval_adj = pval (no adjustment, no crash).
+        """
+        from collections import defaultdict
+        groups: Dict[tuple, List[int]] = defaultdict(list)
+        for i, it in enumerate(items):
+            key = tuple(it.get(k) for k in cohort_keys)
+            groups[key].append(i)
+        for _, idxs in groups.items():
+            pvals = [items[i].get("pval") for i in idxs]
+            valid_mask = [
+                p is not None and np.isfinite(p) and 0.0 <= p <= 1.0
+                for p in pvals
+            ]
+            valid_p = [p for p, v in zip(pvals, valid_mask) if v]
+            if not valid_p:
+                for i in idxs:
+                    items[i]["pval_adj"] = float(items[i].get("pval") or 1.0)
+                continue
+            adj_valid = false_discovery_control(np.array(valid_p), method="bh")
+            it_valid = iter(adj_valid.tolist())
+            for i, v in zip(idxs, valid_mask):
+                if v:
+                    items[i]["pval_adj"] = float(next(it_valid))
+                else:
+                    items[i]["pval_adj"] = float(items[i].get("pval") or 1.0)
+
     # Build time-series data for scatter plots (individual    # Build time-series data points for scatter plot
     def build_timeseries(group_df: pd.DataFrame, min_samples_per_point: int = 10) -> List[Dict]:
         """Build time-series data points for scatter plot."""
@@ -590,6 +622,23 @@ def get_backtest_data() -> Dict[str, Any]:
     index_ts = build_timeseries(index_df)
     index_all = aggregate_group(index_df, min_samples=100)
     index_summary = index_all
+
+    # BH cohort scheme:
+    #   - Summary heatmap cells: per (metric, horizon) column of the heatmap.
+    #   - Per-quarter scatter points: per (metric, horizon, quarter), so
+    #     each quarter is its own multiple-testing family of ~33 cells.
+    _attach_pval_adj(sector_summary, ["metric", "horizon"])
+    _attach_pval_adj(index_summary,  ["metric", "horizon"])
+    _attach_pval_adj(sector_ts,      ["metric", "horizon", "quarter"])
+    _attach_pval_adj(index_ts,       ["metric", "horizon", "quarter"])
+
+    # significant / marginal are now keyed off the BH-adjusted p-value,
+    # matching the methodology page's claim that the star annotations and
+    # the "significant" flag both reflect the adjusted value.
+    for it in sector_summary + index_summary:
+        p = it.get("pval_adj", it["pval"])
+        it["significant"] = bool(p < 0.05)
+        it["marginal"]    = bool(0.05 <= p < 0.10)
 
     # Horizon comparison (IC decay) - Compute for RAW metric only to avoid noise
     horizon_data = []
