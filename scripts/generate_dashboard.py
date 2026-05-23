@@ -58,11 +58,12 @@ from src.config.metrics import (
 )
 from src.config.pipeline import MIN_SNAPSHOTS_FOR_QUARTER
 from src.valuation.size_correction import (
-    apply_size_correction, 
+    apply_size_correction,
     SizeCorrectionResult,
     estimate_size_coefficient,
     SizeCoefficient,
 )
+from src.backtest.signal_metrics import compute_ic_tstat
 
 # Backtest data path
 BACKTEST_SUMMARY_PATH = "data/signal_backtest_summary.csv"
@@ -596,7 +597,15 @@ def get_backtest_data() -> Dict[str, Any]:
                     avg_hit_rate = np.average(name_df["hit_rate"].values, weights=weights) if "hit_rate" in name_df.columns else 0.5
                     median_pval = name_df["ic_pval"].median()
 
-                    results.append({
+                    # Reconstruct the Grinold-Kahn IC t-stat from the per-quarter
+                    # IC vector that name_df already holds (detailed CSV has one
+                    # row per quarter). Computing here avoids a dependency on
+                    # signal_backtest_summary.csv being regenerated.
+                    ic_vec = name_df["ic"].dropna().tolist()
+                    ic_tstat = compute_ic_tstat(ic_vec)
+                    n_quarters = len(ic_vec)
+
+                    item: Dict[str, Any] = {
                         "name": name,
                         "horizon": horizon,
                         "ic": float(avg_ic),
@@ -607,7 +616,11 @@ def get_backtest_data() -> Dict[str, Any]:
                         "significant": bool(median_pval < 0.05),
                         "marginal": bool(0.05 <= median_pval < 0.10),
                         "metric": metric,
-                    })
+                        "n_quarters": int(n_quarters),
+                    }
+                    if np.isfinite(ic_tstat):
+                        item["ic_tstat"] = float(ic_tstat)
+                    results.append(item)
 
         return results
 

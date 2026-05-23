@@ -58,6 +58,8 @@ export interface BacktestItem {
     ic: number;
     pval: number;
     pval_adj?: number;   // BH-adjusted p-value, per (metric, horizon[, quarter]) cohort, computed server-side. Falls back to pval when absent.
+    ic_tstat?: number;   // Grinold-Kahn t-stat of per-quarter ICs (mean/SE, ddof=1). Absent when n_quarters < 2 or all ICs identical.
+    n_quarters?: number; // Count of non-NaN per-quarter ICs that fed this cell. Always present on summary items, absent on per-quarter time-series items.
     n_obs: number;
     spread: number;
     hit_rate: number;

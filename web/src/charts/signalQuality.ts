@@ -99,7 +99,11 @@ export function buildICHeatmap(
                 const pStr = item.pval_adj !== undefined
                     ? `p: ${item.pval.toExponential(1)} (adj ${adj.toExponential(1)})`
                     : `p: ${item.pval.toExponential(1)}`;
-                const txt = `<b>${item.name} (${h}d)</b><br>IC: ${(item.ic * 100).toFixed(1)}%${sig}<br>Hit Rate: ${hitPct}<br>N: ${item.n_obs}<br>${pStr}<br><i>${IC_COPY.tooltipPhrase}</i>`;
+                const tstatStr =
+                    item.ic_tstat !== undefined && (item.n_quarters ?? 0) >= 2
+                        ? `<br>t-stat: ${item.ic_tstat.toFixed(2)} (n=${item.n_quarters}q)`
+                        : '';
+                const txt = `<b>${item.name} (${h}d)</b><br>IC: ${(item.ic * 100).toFixed(1)}%${sig}<br>Hit Rate: ${hitPct}<br>N: ${item.n_obs}${tstatStr}<br>${pStr}<br><i>${IC_COPY.tooltipPhrase}</i>`;
                 rowText.push(txt);
             } else {
                 rowZ.push(NaN);

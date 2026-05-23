@@ -31,6 +31,7 @@ from src.backtest.signal_metrics import (
     compute_quantile_spread,
     compute_hit_rate,
     compute_long_short_returns,
+    compute_ic_tstat,
     winsorize,
 )
 from src.backtest.constants import SIGNAL_FORMATION_LAG_DAYS
@@ -310,7 +311,31 @@ def main():
             "hit_rate": "mean",
             "ls_return": "mean",
         }).reset_index()
-        
+
+        # ic_tstat and n_quarters cannot be expressed via .agg (compute_ic_tstat
+        # needs the full per-quarter IC vector, not a scalar aggregator).
+        # Compute them in a separate groupby and merge on the join keys.
+        def _tstat_block(group: pd.DataFrame) -> pd.Series:
+            ic_values = group["ic"].dropna().tolist()
+            return pd.Series({
+                "ic_tstat": compute_ic_tstat(ic_values),
+                "n_quarters": len(ic_values),
+            })
+
+        tstat_df = (
+            results_df.groupby(
+                ["metric", "group_type", "group_name", "horizon"],
+                as_index=False,
+            )
+            .apply(_tstat_block, include_groups=False)
+            .reset_index(drop=True)
+        )
+        summary = summary.merge(
+            tstat_df,
+            on=["metric", "group_type", "group_name", "horizon"],
+            how="left",
+        )
+
         # 5. Display results (Raw only for summary to avoid noise)
         print("\n" + "=" * 95)
         print("SIGNAL QUALITY BY SECTOR (RAW)")

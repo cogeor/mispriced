@@ -9,6 +9,7 @@ import pytest
 from src.backtest.signal_metrics import (
     compute_hit_rate,
     compute_ic_decay,
+    compute_ic_tstat,
     winsorize,
 )
 
@@ -225,3 +226,46 @@ class TestComputeICDecayWinsorization:
         # whether it's 10.0 or its clipped value, the IC is high and positive
         # (perfectly monotonic signal vs. returns).
         assert decay.ic_values[0] > 0.9
+
+
+class TestComputeICTstat:
+    """Tests for the Grinold-Kahn-style cross-quarter IC t-statistic."""
+
+    def test_stable_ic_yields_large_tstat(self) -> None:
+        """A stable IC of 0.05 across 9 quarters yields |t| >> 2.
+
+        With near-zero variance the SE is tiny, so even a 0.05 mean is
+        highly significant. We tolerate floating noise by demanding |t|>5.
+        """
+        ic_values = [0.05 + 1e-6 * i for i in range(9)]  # near-flat
+        tstat = compute_ic_tstat(ic_values)
+
+        assert np.isfinite(tstat)
+        assert abs(tstat) > 5.0
+
+    def test_alternating_sign_yields_near_zero(self) -> None:
+        """An IC series symmetric about zero produces |t| ~ 0."""
+        ic_values = [0.05, -0.05, 0.05, -0.05, 0.05, -0.05, 0.05, -0.05]
+        tstat = compute_ic_tstat(ic_values)
+
+        assert np.isfinite(tstat)
+        assert abs(tstat) < 0.5
+
+    def test_single_quarter_returns_nan(self) -> None:
+        """One observation has no SE -> nan."""
+        tstat = compute_ic_tstat([0.1])
+
+        assert np.isnan(tstat)
+
+    def test_nan_values_filtered_before_count(self) -> None:
+        """NaNs in the input do not count toward n; if only one finite
+        value remains, result is nan (matches single-quarter contract)."""
+        tstat = compute_ic_tstat([0.1, np.nan, np.nan])
+
+        assert np.isnan(tstat)
+
+    def test_zero_variance_returns_nan(self) -> None:
+        """Identical IC values across quarters -> SE = 0 -> nan."""
+        tstat = compute_ic_tstat([0.05, 0.05, 0.05, 0.05])
+
+        assert np.isnan(tstat)
