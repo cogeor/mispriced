@@ -34,8 +34,20 @@ export function renderValuationMap(
         // Negate mispricing so positive = overvalued
         const mVal = -(d[metricKey]);
         const mPct = (mVal > 0 ? '+' : '') + (mVal * 100).toFixed(1) + '%';
-        const uncert = ((d.relStd || 0) * 100).toFixed(1) + '%';
-        return `<b>${d.company} (${d.ticker})</b><br>${d.sector}<br><br>Predicted: $${getPredicted(d).toFixed(2)}B<br>Actual: $${d.actual.toFixed(2)}B<br>Mispricing: <b>${mPct}</b><br>Uncertainty: ±${uncert}`;
+        // Prefer the calibrated 90% CI from CQR when present. The CI is a
+        // standalone range from two quantile regressors + conformal correction;
+        // it is NOT a band around `predicted` (a separate mean GBR fit), so the
+        // wording must not imply `predicted` lies inside it. Fall back to the
+        // legacy relative-std line for quarters not yet backfilled with CQR.
+        const hasCI =
+            d.predicted_lo != null &&
+            d.predicted_hi != null &&
+            Number.isFinite(d.predicted_lo) &&
+            Number.isFinite(d.predicted_hi);
+        const uncertLine = hasCI
+            ? `<b>90% CI:</b> $${(d.predicted_lo as number).toFixed(2)}B &ndash; $${(d.predicted_hi as number).toFixed(2)}B`
+            : `Uncertainty: ±${((d.relStd || 0) * 100).toFixed(1)}%`;
+        return `<b>${d.company} (${d.ticker})</b><br>${d.sector}<br><br>Predicted: $${getPredicted(d).toFixed(2)}B<br>Actual: $${d.actual.toFixed(2)}B<br>Mispricing: <b>${mPct}</b><br>${uncertLine}`;
     });
 
     const customdata = data.map(d => [d.ticker, d.sector, d.company, d[metricKey]]);

@@ -126,6 +126,7 @@
                 <li><a href="#mispricing" class="text-blue-400 hover:text-blue-300">5. Mispricing Calculation</a></li>
                 <li><a href="#backtesting" class="text-blue-400 hover:text-blue-300">6. Signal Quality & Backtesting</a></li>
                 <li><a href="#limitations" class="text-blue-400 hover:text-blue-300">7. Limitations & Caveats</a></li>
+                <li><a href="#references" class="text-blue-400 hover:text-blue-300">References</a></li>
             </ol>
         </nav>
 
@@ -480,17 +481,94 @@ objective: reg:absoluteerror
                     </ul>
                 </div>
 
-                <h3 class="font-semibold text-gray-200 mt-6">Uncertainty Measure</h3>
-                <div class="formula text-center">
-                    <code class="text-lg">
-                        relative_std = prediction_std / actual_mcap
-                    </code>
+                <h3 class="font-semibold text-gray-200 mt-6">Conformal Prediction Intervals (CQR)</h3>
+                <p class="text-sm text-gray-400">
+                    Each prediction ships with a <strong>90% prediction interval</strong>
+                    <code>[predicted_lo, predicted_hi]</code> built via
+                    <strong>Conformalized Quantile Regression</strong> with a CV+ calibration
+                    loop<sup><a href="#cqr-ref-1" class="text-blue-400">1</a>,<a href="#cqr-ref-2" class="text-blue-400">2</a></sup>.
+                    Two auxiliary XGBoost models are fit at the 5th and 95th conditional quantiles;
+                    out-of-fold nonconformity scores
+                    <code>s_i = max(&#375;_lo &minus; y_i, y_i &minus; &#375;_hi)</code> are pooled across folds and the
+                    90th percentile <code>q</code> is added back to widen the band to its calibrated
+                    width. The result is a multiplicative band in raw market-cap space (constant
+                    width in log space): a $10B name gets a tighter dollar band than a $1T name in
+                    absolute terms, but the same relative band &mdash; which is the right scaling for
+                    market caps spanning five orders of magnitude.
+                </p>
+                <p class="text-sm text-gray-400">
+                    Note: the central estimate <code>predicted</code> is a separately fit gradient-boosted mean
+                    regressor; the CI bounds come from two quantile regressors plus the conformal correction.
+                    For a small fraction of stocks (typically those where the mean and quantile models
+                    disagree most), <code>predicted</code> can fall outside <code>[predicted_lo, predicted_hi]</code> &mdash;
+                    this is expected and does not invalidate the interval's calibration.
+                </p>
+
+                <h4 class="font-semibold text-gray-200 mt-4">Empirical Coverage</h4>
+                <p class="text-sm text-gray-400">
+                    Calibration is verified per quarter by computing the fraction of stocks whose
+                    actual market cap falls inside its predicted interval. A well-calibrated 90% CI
+                    lands at <strong>empirical coverage &asymp; 0.90</strong>.
+                </p>
+
+                <div id="cqr-coverage-table" class="mt-3 overflow-x-auto">
+                    <p class="text-sm text-gray-500"><em>Loading coverage diagnostic&hellip;</em></p>
                 </div>
-                <p class="text-sm text-gray-400 mt-3">
-                    Higher relative standard deviation indicates less confident predictions. Stocks with unusual
-                    financial profiles or sparse comparable data will have higher uncertainty.
+
+                <p class="text-xs text-gray-500 mt-3">
+                    <strong>Assumption.</strong> Conformal coverage holds under
+                    <em>exchangeability</em> of the calibration and test data. Within a single quarter
+                    this is a reasonable approximation; <em>across</em> quarters it does not hold
+                    because market regimes shift. Quarters not yet re-run with CQR will show as
+                    <em>&mdash;</em> in the table above until the backfill completes.
                 </p>
             </div>
+
+            <script>
+                (async () => {
+                    const target = document.getElementById('cqr-coverage-table');
+                    if (!target) return;
+                    try {
+                        const r = await fetch('core.json', { cache: 'no-store' });
+                        if (!r.ok) throw new Error('HTTP ' + r.status);
+                        const data = await r.json();
+                        const rows = Array.isArray(data.coverage_diagnostic) ? data.coverage_diagnostic : [];
+                        if (rows.length === 0) {
+                            target.innerHTML =
+                                '<p class="text-sm text-gray-500"><em>Coverage data unavailable yet (single quarter shown after first backfill).</em></p>';
+                            return;
+                        }
+                        const fmtPct = (v) => (v == null || !Number.isFinite(v)) ? '&mdash;' : (v * 100).toFixed(1) + '%';
+                        const fmtN = (n) => (n == null || !Number.isFinite(n)) ? '&mdash;' : n.toLocaleString();
+                        const fmtAlpha = (a) => (a == null || !Number.isFinite(a)) ? '&mdash;' : a.toFixed(2);
+                        const head = `
+                            <thead>
+                                <tr class="text-left text-gray-400">
+                                    <th>Quarter</th>
+                                    <th>Nominal coverage</th>
+                                    <th>Empirical coverage</th>
+                                    <th>n</th>
+                                    <th>&alpha;</th>
+                                </tr>
+                            </thead>`;
+                        const body = rows.map((row) => `
+                            <tr>
+                                <td>${String(row.quarter ?? '&mdash;')}</td>
+                                <td>${fmtPct(row.nominal)}</td>
+                                <td>${fmtPct(row.empirical)}</td>
+                                <td>${fmtN(row.n)}</td>
+                                <td>${fmtAlpha(row.alpha)}</td>
+                            </tr>`).join('');
+                        target.innerHTML =
+                            '<table class="feature-table w-full text-sm"><caption class="sr-only">Per-quarter CQR coverage diagnostic</caption>' +
+                            head + '<tbody class="text-gray-300">' + body + '</tbody></table>';
+                    } catch (err) {
+                        target.innerHTML =
+                            '<p class="text-sm text-gray-500"><em>Coverage data unavailable yet (single quarter shown after first backfill).</em></p>';
+                        console.error('CQR coverage load failed:', err);
+                    }
+                })();
+            </script>
         </section>
 
         <!-- Section 6: Backtesting -->
@@ -625,6 +703,16 @@ objective: reg:absoluteerror
                         The dataset includes currently traded stocks. Delisted companies are not included
                         in backtests.
                     </li>
+                    <li>
+                        <strong class="text-gray-300">Cross-quarter coverage drift:</strong>
+                        The 90% prediction intervals shown in the dashboard tooltip rely on a
+                        conformal calibration that assumes <em>exchangeability</em> between
+                        calibration and test data. Within a single quarter this is approximately
+                        true; across quarters it is not &mdash; under regime shifts (rate changes,
+                        sector rotations, vol spikes) the empirical coverage on a held-out
+                        quarter can drift away from the nominal 90% even when the in-quarter
+                        calibration is perfect.
+                    </li>
                 </ul>
 
                 <h3 class="font-semibold text-gray-200 mt-4">Data Limitations</h3>
@@ -661,6 +749,25 @@ objective: reg:absoluteerror
                     </li>
                 </ul>
             </div>
+        </section>
+
+        <!-- References -->
+        <section id="references" class="card p-6 mb-6">
+            <h2 class="text-xl font-bold text-white mb-4">References</h2>
+            <ol class="space-y-3 text-sm text-gray-400 list-decimal list-inside">
+                <li id="cqr-ref-1">
+                    Romano, Y., Patterson, E., &amp; Cand&egrave;s, E. J. (2019).
+                    <em>Conformalized Quantile Regression.</em> Advances in Neural
+                    Information Processing Systems 32 (NeurIPS 2019).
+                    <a href="https://arxiv.org/abs/1905.03222" class="text-blue-400 hover:text-blue-300" target="_blank" rel="noopener">arXiv:1905.03222</a>
+                </li>
+                <li id="cqr-ref-2">
+                    Barber, R. F., Cand&egrave;s, E. J., Ramdas, A., &amp; Tibshirani, R. J. (2021).
+                    <em>Predictive inference with the jackknife+.</em> The Annals of
+                    Statistics, 49(1), 486&ndash;507.
+                    <a href="https://arxiv.org/abs/1905.02928" class="text-blue-400 hover:text-blue-300" target="_blank" rel="noopener">arXiv:1905.02928</a>
+                </li>
+            </ol>
         </section>
 
         <!-- Footer -->
