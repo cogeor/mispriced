@@ -15,6 +15,7 @@ from src.index.service import IndexService
 from .models import BacktestConfig, BacktestPoint, BacktestResult, CorrelationMetrics
 from .index_prices import get_index_return
 from .analysis import analyze_correlation
+from .constants import SIGNAL_FORMATION_LAG_DAYS
 
 logger = logging.getLogger(__name__)
 
@@ -191,11 +192,15 @@ class BacktestService:
                 / index_result.estimated_index_std
             )
         
-        # 5. Fetch forward returns for each horizon
+        # 5. Fetch forward returns for each horizon.
+        # Returns are measured starting `SIGNAL_FORMATION_LAG_DAYS` after the
+        # cutoff to avoid trading on pre-release fundamentals (10-Q filings
+        # land ~40-45 days after fiscal period end).
         forward_returns: Dict[int, float] = {}
+        lagged_start = cutoff_date + timedelta(days=SIGNAL_FORMATION_LAG_DAYS)
         for horizon in horizons:
-            end_date = cutoff_date + timedelta(days=horizon)
-            ret = get_index_return(index_id, cutoff_date, end_date)
+            end_date = lagged_start + timedelta(days=horizon)
+            ret = get_index_return(index_id, lagged_start, end_date)
             if ret is not None:
                 forward_returns[horizon] = ret
         

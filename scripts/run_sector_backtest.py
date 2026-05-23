@@ -31,7 +31,9 @@ from src.backtest.signal_metrics import (
     compute_quantile_spread,
     compute_hit_rate,
     compute_long_short_returns,
+    winsorize,
 )
+from src.backtest.constants import SIGNAL_FORMATION_LAG_DAYS
 from src.config.pipeline import MIN_SNAPSHOTS_FOR_QUARTER
 from sqlalchemy import func
 
@@ -123,12 +125,13 @@ def compute_group_metrics(
         returns_list = []
         signal_list = []
         
+        lagged_start = snapshot_date + timedelta(days=SIGNAL_FORMATION_LAG_DAYS)
         for i, ticker in enumerate(tickers):
             if ticker not in prices or not prices[ticker]:
                 continue
-            
-            ret = get_ticker_return(prices[ticker], snapshot_date, horizon)
-            if ret is not None and not np.isnan(ret) and abs(ret) < 2.0:
+
+            ret = get_ticker_return(prices[ticker], lagged_start, horizon)
+            if ret is not None and not np.isnan(ret):
                 returns_list.append(ret)
                 signal_list.append(signal[i])
         
@@ -146,7 +149,14 @@ def compute_group_metrics(
             
         signal_arr = signal_arr[valid_mask]
         returns_arr = returns_arr[valid_mask]
-        
+
+        # Per-quarter / per-cohort tail winsorization. Replaces the previous
+        # `abs(ret) < 2.0` row-drop. Applied to BOTH returns and signal so
+        # rank-based metrics (IC, quantiles, hit rate) see the same clipped
+        # cohort that downstream display does.
+        returns_arr = winsorize(returns_arr)
+        signal_arr = winsorize(signal_arr)
+
         ic, ic_pval = compute_ic(signal_arr, returns_arr)
         quantile_returns = compute_quantile_returns(signal_arr, returns_arr)
         spread = compute_quantile_spread(signal_arr, returns_arr)
@@ -198,18 +208,31 @@ def main():
             # Determine which horizons are available based on days since quarter
             today = date.today()
             days_since_quarter = (today - q_date).days
-            available_horizons = [h for h in HORIZONS if h <= days_since_quarter - 5]  # -5 for price lag buffer
-            
+            # With a 45-day signal-formation lag, a horizon h needs at least
+            # SIGNAL_FORMATION_LAG_DAYS + h + 5 days elapsed before its forward
+            # return is observable (the +5 buffers weekend/holiday price gaps).
+            available_horizons = [
+                h for h in HORIZONS
+                if h <= days_since_quarter - SIGNAL_FORMATION_LAG_DAYS - 5
+            ]
+
             if not available_horizons:
-                logger.info(f"  Skipping: Only {days_since_quarter} days elapsed, need at least {min(HORIZONS) + 5}")
+                logger.info(
+                    f"  Skipping: Only {days_since_quarter} days elapsed, "
+                    f"need at least {SIGNAL_FORMATION_LAG_DAYS + min(HORIZONS) + 5}"
+                )
                 continue
-            
+
             logger.info(f"  Days since quarter: {days_since_quarter}, horizons available: {available_horizons}")
-            
-            # Fetch prices
-            start_date = q_date - timedelta(days=5)
+
+            # Fetch prices.
+            # Need prices from ~5d before the lagged start through `lag + max_horizon
+            # + 10d` after the quarter (10d buffer for weekends / closed-market gaps).
+            start_date = q_date + timedelta(days=SIGNAL_FORMATION_LAG_DAYS - 5)
             max_available_horizon = max(available_horizons)
-            end_date = q_date + timedelta(days=max_available_horizon + 10)
+            end_date = q_date + timedelta(
+                days=SIGNAL_FORMATION_LAG_DAYS + max_available_horizon + 10
+            )
             
             logger.info(f"  Fetching prices...")
             prices = fetch_and_cache_prices(session, tickers, start_date, end_date, batch_size=100)

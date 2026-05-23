@@ -53,6 +53,43 @@ class ICDecay(BaseModel):
 
 
 # =============================================================================
+# Winsorization Helper
+# =============================================================================
+
+def winsorize(
+    arr: np.ndarray,
+    lower_pct: float = 1.0,
+    upper_pct: float = 99.0,
+) -> np.ndarray:
+    """Clip an array to its [lower_pct, upper_pct] percentile range.
+
+    NaN-aware: percentiles are computed with ``np.nanpercentile`` and NaNs
+    are preserved in the output (clipping a NaN leaves it NaN). Returns
+    the input unchanged when fewer than 5 finite values are present so
+    small cohorts do not blow up on degenerate quantiles. Also returns
+    a copy unchanged when the resulting bounds are not finite or when
+    ``lo >= hi`` (e.g. all values identical).
+
+    Args:
+        arr: 1-D numeric array (returns or signal).
+        lower_pct: Lower percentile (default 1.0).
+        upper_pct: Upper percentile (default 99.0).
+
+    Returns:
+        A new array of the same shape, clipped to the percentile band.
+    """
+    arr = np.asarray(arr, dtype=float)
+    finite = arr[np.isfinite(arr)]
+    if finite.size < 5:
+        return arr.copy()
+    lo = float(np.nanpercentile(arr, lower_pct))
+    hi = float(np.nanpercentile(arr, upper_pct))
+    if not np.isfinite(lo) or not np.isfinite(hi) or lo >= hi:
+        return arr.copy()
+    return np.clip(arr, lo, hi)
+
+
+# =============================================================================
 # Core Metric Functions
 # =============================================================================
 
@@ -271,12 +308,17 @@ def compute_ic_decay(
                 continue
             
             ret = get_ticker_return(prices[ticker], base_date, horizon)
-            if ret is not None and not np.isnan(ret) and abs(ret) < 2.0:
+            if ret is not None and not np.isnan(ret):
                 returns.append(ret)
                 valid_signal.append(signal[i])
-        
+
         if len(returns) >= 10:
-            ic, pval = compute_ic(np.array(valid_signal), np.array(returns))
+            # Per-cohort tail winsorization. Replaces the previous
+            # `abs(ret) < 2.0` row-drop. Applied to BOTH returns and signal
+            # so rank-based IC sees the same clipped cohort.
+            returns_arr = winsorize(np.array(returns))
+            signal_arr = winsorize(np.array(valid_signal))
+            ic, pval = compute_ic(signal_arr, returns_arr)
         else:
             ic, pval = np.nan, 1.0
         
