@@ -1,6 +1,7 @@
 import Plotly from 'plotly.js-dist-min';
 import type { BacktestItem } from '../types';
 import { getSignificanceStars, applyBHCorrection } from '../utils';
+import { IC_COPY } from '../config';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type PlotData = any;
@@ -88,11 +89,11 @@ export function buildICHeatmap(
         horizons.forEach(h => {
             const item = filtered.find(d => d.name === name && d.horizon === h);
             if (item) {
-                // Negate IC so positive = good signal (overvalued stocks go down)
-                rowZ.push(-item.ic);
+                // Display raw Spearman IC. Sign follows the convention: signal_raw > 0 = undervalued.
+                rowZ.push(item.ic);
                 const sig = item.pval < 0.05 ? '★' : '';
                 const hitPct = item.hit_rate ? `${(item.hit_rate * 100).toFixed(1)}%` : 'N/A';
-                const txt = `<b>${item.name} (${h}d)</b><br>IC: ${(-item.ic * 100).toFixed(1)}%${sig}<br>Hit Rate: ${hitPct}<br>N: ${item.n_obs}<br>p-val: ${item.pval.toExponential(1)}`;
+                const txt = `<b>${item.name} (${h}d)</b><br>IC: ${(item.ic * 100).toFixed(1)}%${sig}<br>Hit Rate: ${hitPct}<br>N: ${item.n_obs}<br>p-val: ${item.pval.toExponential(1)}<br><i>${IC_COPY.tooltipPhrase}</i>`;
                 rowText.push(txt);
             } else {
                 rowZ.push(NaN);
@@ -134,7 +135,7 @@ export function buildICHeatmap(
         horizons.forEach((h) => {
             const item = filtered.find(d => d.name === name && d.horizon === h);
             if (item) {
-                const icPct = (-item.ic * 100).toFixed(1);
+                const icPct = (item.ic * 100).toFixed(1);
                 const sig = getSignificanceStars(item.pval);
                 const sigText = sig ? '\n' + sig : '';
                 annotations.push({
@@ -178,8 +179,8 @@ export function renderSignalDecay(horizonData: HorizonDecayItem[], elementId: st
 
     const sorted = [...horizonData].sort((a, b) => a.horizon - b.horizon);
     const x = sorted.map(d => d.horizon);
-    // Negate IC so positive = good signal (overvalued stocks go down)
-    const y = sorted.map(d => -d.avg_ic);
+    // Display raw Spearman IC. Sign follows the convention: signal_raw > 0 = undervalued.
+    const y = sorted.map(d => d.avg_ic);
     const errors = sorted.map(d => d.std_error || 0);
 
     const trace: PlotData = {

@@ -511,14 +511,25 @@ objective: reg:absoluteerror
 
                 <div class="bg-gray-800/50 rounded-lg p-4 mt-3">
                     <h4 class="font-semibold text-gray-200 mb-2">Interpreting IC</h4>
+                    <p class="text-sm text-gray-400 mb-3">
+                        The signal convention is
+                        <code class="text-gray-300">signal_raw = (predicted_mcap - actual_mcap) / actual_mcap</code>,
+                        so <code class="text-gray-300">signal_raw &gt; 0</code> means the model thinks the stock is
+                        <strong>undervalued</strong> (price should be higher than it is). IC is the
+                        <strong>raw Spearman rank correlation</strong> of the signal against the forward return &mdash;
+                        no sign flip is applied.
+                    </p>
                     <ul class="text-sm space-y-1 text-gray-400">
-                        <li><strong class="text-green-400">IC &gt; 0:</strong> Signal worked — overvalued stocks underperformed, undervalued outperformed</li>
-                        <li><strong class="text-gray-400">IC ~ 0:</strong> No predictive signal</li>
-                        <li><strong class="text-red-400">IC &lt; 0:</strong> Signal inverted — overvalued stocks outperformed (momentum dominated)</li>
+                        <li><strong class="text-green-400">IC &gt; 0:</strong> Book-based residual predicted mean reversion &mdash; undervalued stocks outperformed and overvalued underperformed (value strategy worked over the horizon).</li>
+                        <li><strong class="text-gray-400">IC ~ 0:</strong> No predictive signal.</li>
+                        <li><strong class="text-red-400">IC &lt; 0:</strong> Market continued to price the non-book premium &mdash; undervalued stocks kept underperforming (intangibles/growth/quality factors dominated book value).</li>
                     </ul>
-                    <p class="text-sm text-gray-500 mt-2">
-                        On the dashboard, IC is displayed such that <strong>positive = good signal</strong>
-                        (mispricing predicted subsequent returns correctly).
+                    <p class="text-sm text-gray-500 mt-3">
+                        The dashboard shows the raw Spearman IC. Which sign counts as "expected" depends on how you read
+                        the result: as a <strong>value-strategy backtest</strong> (reversion framing &mdash; positive IC
+                        is the headline) or as evidence of a <strong>persistent intangibles premium</strong>
+                        (intangibles framing &mdash; negative IC is the headline). The two framings agree on the data
+                        and disagree only on which pole counts as confirmation.
                     </p>
                 </div>
 

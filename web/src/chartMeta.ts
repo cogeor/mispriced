@@ -5,6 +5,8 @@
  * Data, Axes, and Insights sections shown on hover/tap of the "?" icon.
  */
 
+import { IC_COPY } from './config';
+
 export interface ChartMeta {
     data: string;
     axes: string;
@@ -45,25 +47,25 @@ export const CHART_META: Record<string, ChartMeta> = {
     icSectorChart: {
         data: 'Information Coefficient (Spearman rank correlation) between mispricing signal and forward returns, grouped by sector and horizon. Stars indicate statistical significance after Benjamini-Hochberg correction.',
         axes: 'Rows: sectors. Columns: forward return horizons (10, 30, 60, 90 days). Cell color: IC value (blue = positive, red = negative). Annotations: IC% and significance stars.',
-        insights: 'Positive IC means the signal predicts returns (underpriced stocks outperform). Look for sectors with consistently positive IC across horizons. Stars (p<0.05) indicate reliable signal.',
+        insights: `${IC_COPY.tooltipPhrase} Look for cells with consistent sign across horizons. Stars (p<0.05) indicate reliable signal.`,
     },
 
     icSectorDecayChart: {
         data: 'Average IC across all sectors at each horizon, showing how signal strength evolves over time. Error bands show standard deviation across sectors.',
         axes: 'X-axis: forward return horizon (trading days). Y-axis: average IC (Spearman correlation). Shaded area: +/- 1 standard deviation.',
-        insights: 'Signal typically decays at longer horizons as prices converge to fair value. Peak IC horizon suggests optimal holding period. Flat decay implies persistent mispricing.',
+        insights: `${IC_COPY.tooltipPhrase} Signal typically decays at longer horizons as prices converge to fair value. Peak |IC| horizon suggests optimal holding period.`,
     },
 
     icIndexChart: {
         data: 'Same as Sector IC but grouped by index instead of sector. Shows whether the signal works better in certain markets.',
         axes: 'Rows: indices. Columns: forward return horizons (10, 30, 60, 90 days). Cell color: IC value. Annotations: IC% and significance stars.',
-        insights: 'Compare IC across markets to identify where the model has best predictive power. Emerging markets may show higher IC due to less analyst coverage.',
+        insights: `${IC_COPY.tooltipPhrase} Compare IC across markets to identify where the model has best predictive power.`,
     },
 
     icIndexDecayChart: {
         data: 'Average IC across all indices at each horizon, showing signal decay by market. Error bands show cross-index dispersion.',
         axes: 'X-axis: forward return horizon (trading days). Y-axis: average IC. Shaded area: +/- 1 standard deviation.',
-        insights: 'Faster decay in efficient markets (e.g., US) vs slower decay in less covered markets. Overall level indicates global signal quality.',
+        insights: `${IC_COPY.tooltipPhrase} Faster decay in efficient markets (e.g., US) vs slower decay in less covered markets.`,
     },
 
     uncertaintyChart: {
