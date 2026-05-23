@@ -536,12 +536,19 @@ objective: reg:absoluteerror
                 <h3 class="font-semibold text-gray-200 mt-6">Hit Rate</h3>
                 <div class="formula text-center">
                     <code class="text-lg">
-                        hit_rate = % of stocks where mispricing direction matched return direction
+                        hit_rate = fraction of stocks where sign(signal) == sign(forward_return)
                     </code>
                 </div>
                 <p class="text-sm text-gray-400 mt-3">
-                    A hit rate above 50% indicates the signal has some directional predictive power.
-                    However, magnitude of returns matters more than hit rate for portfolio construction.
+                    A "hit" occurs when the signal and the forward return have the
+                    same sign (both positive or both negative). Under the convention
+                    used in this dashboard (<code>signal &gt; 0</code> = undervalued),
+                    hit rate above 50% indicates the signal's sign agrees with the
+                    return's sign more often than chance. Hit rate is intentionally
+                    symmetric and does not pre-commit to a value-vs-momentum framing
+                    &mdash; that interpretation comes from the IC sign described above.
+                    As always, the magnitude of returns matters more than hit rate for
+                    portfolio construction.
                 </p>
 
                 <h3 class="font-semibold text-gray-200 mt-6">Statistical Significance</h3>

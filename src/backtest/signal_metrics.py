@@ -171,27 +171,31 @@ def compute_hit_rate(
 ) -> Tuple[float, float]:
     """
     Compute directional hit rate.
-    
-    A "hit" occurs when:
-    - Signal > 0 (overpriced) AND return < 0 (underperformed), OR
-    - Signal < 0 (underpriced) AND return > 0 (outperformed)
-    
-    This tests the mean-reversion hypothesis.
-    
+
+    A "hit" occurs when signal direction matches return direction:
+    - signal > 0 AND return > 0, OR
+    - signal < 0 AND return < 0
+
+    This is a symmetric, convention-free measure of how often the signal's
+    sign predicts the sign of the forward return. Note: the signal convention
+    in this codebase is `signal_raw > 0` = undervalued (see
+    `scripts/run_sector_backtest.py`), so a hit rate above 0.5 means the
+    signal-direction-matched-return-direction tendency is stronger than chance.
+
     Returns:
         Tuple of (hit_rate, binomial_pvalue)
     """
     valid = ~(np.isnan(signal) | np.isnan(returns))
     signal = signal[valid]
     returns = returns[valid]
-    
+
     n = len(signal)
     if n < 5:
         return (np.nan, 1.0)
-    
+
     hits = np.sum(
-        ((signal > 0) & (returns < 0)) |
-        ((signal < 0) & (returns > 0))
+        ((signal > 0) & (returns > 0)) |
+        ((signal < 0) & (returns < 0))
     )
     
     hit_rate = hits / n
