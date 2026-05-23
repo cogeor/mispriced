@@ -41,6 +41,7 @@ from src.valuation.feature_builder import build_feature_matrix
 from src.valuation.config import gbr_baseline_model
 from src.valuation.size_correction import estimate_size_coefficient, compute_residual_mispricing
 from src.valuation.currency_fix import normalize_snapshots
+from src.valuation.conformal import ConformalQuantileRegressor
 from src.evaluation import SimpleRepeatedCV, DEFAULT_MODEL_PARAMS
 from src.config.pipeline import (
     MIN_SNAPSHOTS_FOR_QUARTER,
@@ -192,6 +193,7 @@ def run_valuation_for_quarter(
     model_config,
     model_version: str,
     debug_tickers: Optional[List[str]] = None,
+    no_conformal: bool = False,
 ) -> int:
     """
     Run the full valuation pipeline for a single quarter.
@@ -301,6 +303,39 @@ def run_valuation_for_quarter(
     residual_error, _ = compute_residual_mispricing(relative_error, actual_mcap)
     logger.info(f"  Residual error: mean={np.mean(residual_error):.3f}, median={np.median(residual_error):.3f}")
 
+    # 6.5. Conformalized Quantile Regression - calibrated 90% prediction interval.
+    # Runs on the SAME (X, y_log) as the point-prediction path above. Independent
+    # 5-fold CV inside the class; ~20% wall-clock overhead per quarter.
+    pred_mcap_lo: Optional[np.ndarray] = None
+    pred_mcap_hi: Optional[np.ndarray] = None
+    conformal_alpha_value: Optional[float] = None
+
+    if not no_conformal:
+        logger.info("  Running CQR (CV+ Conformalized Quantile Regression)...")
+        try:
+            cqr = ConformalQuantileRegressor(
+                alpha=0.1,
+                n_folds=N_CV_FOLDS,
+                random_state=model_config.random_seed,
+            )
+            cqr_results = cqr.fit_predict(X, y_log)
+            # Convert log-space bounds to raw mcap via exp().
+            pred_mcap_lo = np.exp(cqr_results["lower"])
+            pred_mcap_hi = np.exp(cqr_results["upper"])
+            conformal_alpha_value = float(cqr_results["alpha"])
+            logger.info(
+                f"  CQR empirical coverage: {cqr_results['empirical_coverage']:.4f} "
+                f"(nominal {1.0 - conformal_alpha_value:.2f}), "
+                f"q={cqr_results['q']:.4f}, n_calibration={cqr_results['n_calibration']}"
+            )
+        except Exception as e:
+            logger.error(f"  CQR failed: {e}; falling back to NULL bounds for this quarter")
+            pred_mcap_lo = None
+            pred_mcap_hi = None
+            conformal_alpha_value = None
+    else:
+        logger.info("  --no-conformal set; skipping CQR (lo/hi/alpha will be NULL)")
+
     logger.info("  Saving valuations to database...")
     valuations = []
 
@@ -322,6 +357,13 @@ def run_valuation_for_quarter(
             residual_error=float(residual_error[i]),
             relative_std=float(relative_std[i]),
             n_experiments=N_CV_REPEATS,
+            predicted_mcap_lo=(
+                float(pred_mcap_lo[i]) if pred_mcap_lo is not None else None
+            ),
+            predicted_mcap_hi=(
+                float(pred_mcap_hi[i]) if pred_mcap_hi is not None else None
+            ),
+            conformal_alpha=conformal_alpha_value,
         )
         valuations.append(val)
 
@@ -339,7 +381,11 @@ def run_valuation_for_quarter(
     return len(valuations)
 
 
-def run_all_quarters(quarters: Optional[List[datetime]] = None, debug_tickers: Optional[List[str]] = None) -> int:
+def run_all_quarters(
+    quarters: Optional[List[datetime]] = None,
+    debug_tickers: Optional[List[str]] = None,
+    no_conformal: bool = False,
+) -> int:
     """
     Run valuation pipeline for all (or specified) quarters.
 
@@ -347,6 +393,9 @@ def run_all_quarters(quarters: Optional[List[datetime]] = None, debug_tickers: O
         quarters: Optional list of specific quarters to process.
                   If None, processes all valid quarters.
         debug_tickers: List of tickers to debug.
+        no_conformal: If True, skip CQR and write NULLs for the conformal
+                      interval columns (predicted_mcap_lo / predicted_mcap_hi /
+                      conformal_alpha).
 
     Returns:
         Total number of valuations created
@@ -402,7 +451,8 @@ def run_all_quarters(quarters: Optional[List[datetime]] = None, debug_tickers: O
         total_valuations = 0
         for quarter_date in quarters_to_process:
             count = run_valuation_for_quarter(
-                session, quarter_date, model_config, model_version, debug_tickers
+                session, quarter_date, model_config, model_version, debug_tickers,
+                no_conformal=no_conformal,
             )
             total_valuations += count
 
@@ -421,10 +471,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run quarterly valuation pipeline")
     parser.add_argument("--tickers", type=str, help="Comma-separated list of tickers to debug")
     parser.add_argument("--quarter", type=str, help="Specific quarter date (YYYY-MM-DD)")
+    parser.add_argument(
+        "--no-conformal",
+        action="store_true",
+        help="Skip CQR; write NULL for predicted_mcap_lo/hi/conformal_alpha.",
+    )
     args = parser.parse_args()
 
     debug_tickers_list = [t.strip().upper() for t in args.tickers.split(",")] if args.tickers else None
-    
+
     specific_quarters = None
     if args.quarter:
         try:
@@ -434,4 +489,8 @@ if __name__ == "__main__":
             logger.error("Invalid date format. Use YYYY-MM-DD")
             sys.exit(1)
 
-    run_all_quarters(quarters=specific_quarters, debug_tickers=debug_tickers_list)
+    run_all_quarters(
+        quarters=specific_quarters,
+        debug_tickers=debug_tickers_list,
+        no_conformal=args.no_conformal,
+    )
